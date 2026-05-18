@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#17202a">
+    <title>Street Pick</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">SP</span>
+          <div>
+            <h1>Street Pick</h1>
+            <p>Weekend market vote</p>
+          </div>
+        </div>
+        <button class="icon-button" id="refreshButton" type="button" aria-label="Refresh results">↻</button>
+      </header>
+
+      <nav class="view-tabs" aria-label="Views">
+        <button class="tab-button active" type="button" data-view="vote">Vote</button>
+        <button class="tab-button" type="button" data-view="results">Results</button>
+        <button class="tab-button" type="button" data-view="matches">Matches</button>
+      </nav>
+
+      <main class="view active" id="voteView">
+        <section class="deck-meta" aria-live="polite">
+          <span id="progressText">0 / 120 voted</span>
+          <span id="remainingText">Loading</span>
+        </section>
+
+        <section class="deck-area" id="deckArea">
+          <article class="vote-card" id="voteCard" aria-live="polite">
+            <div class="vote-stamp yes">YES</div>
+            <div class="vote-stamp no">NO</div>
+            <div class="pull-stamp">RESULTS</div>
+            <img id="cardImage" alt="" draggable="false">
+            <div class="card-copy">
+              <span class="category-pill" id="cardCategory"></span>
+              <h2 id="cardTitle"></h2>
+              <p id="cardDescription"></p>
+            </div>
+          </article>
+
+          <article class="empty-state" id="emptyState" hidden>
+            <span class="empty-kicker">Deck complete</span>
+            <h2>You voted on every pop-up.</h2>
+            <p>Results are ready, including your high-consensus matches.</p>
+            <div class="empty-actions">
+              <button class="primary-button" type="button" data-view="results">Open results</button>
+              <button class="secondary-button" type="button" data-view="matches">Open matches</button>
+            </div>
+          </article>
+        </section>
+
+        <footer class="vote-actions">
+          <button class="choice-button no" id="noButton" type="button" aria-label="Vote no">
+            <span>No</span>
+          </button>
+          <button class="undo-button" id="undoButton" type="button" disabled>Undo</button>
+          <button class="choice-button yes" id="yesButton" type="button" aria-label="Vote yes">
+            <span>Yes</span>
+          </button>
+        </footer>
+      </main>
+
+      <main class="view" id="resultsView">
+        <section class="summary-strip" aria-live="polite">
+          <div>
+            <span class="summary-value" id="swipeCount">0</span>
+            <span class="summary-label">swipes</span>
+          </div>
+          <div>
+            <span class="summary-value" id="sessionCount">0</span>
+            <span class="summary-label">sessions</span>
+          </div>
+          <div>
+            <span class="summary-value" id="decisionTime">--</span>
+            <span class="summary-label">avg sec</span>
+          </div>
+        </section>
+
+        <section class="results-controls">
+          <label>
+            <span>Sort</span>
+            <select id="sortSelect">
+              <option value="most-loved">Most loved</option>
+              <option value="most-divisive">Most divisive</option>
+              <option value="most-voted">Most voted</option>
+              <option value="least-loved">Least loved</option>
+            </select>
+          </label>
+          <label>
+            <span>Category</span>
+            <select id="categorySelect">
+              <option value="all">All</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="results-list" id="resultsList" aria-live="polite"></section>
+      </main>
+
+      <main class="view" id="matchesView">
+        <section class="matches-header">
+          <span class="empty-kicker">Your yes votes</span>
+          <h2>High-consensus picks</h2>
+          <p id="matchCount">0 matches</p>
+        </section>
+        <section class="results-list" id="matchesList" aria-live="polite"></section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

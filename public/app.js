@@ -1,0 +1,523 @@
+const sessionKey = "streetPickSessionId";
+const sessionPattern = /^[A-Za-z0-9_-]{12,80}$/;
+
+const state = {
+  sessionId: getSessionId(),
+  items: [],
+  results: [],
+  analytics: null,
+  view: "vote",
+  sort: "most-loved",
+  category: "all",
+  isVoting: false,
+  drag: null,
+  lastVote: null,
+  cardRenderedAt: performance.now(),
+  poller: null
+};
+
+const elements = {
+  tabs: Array.from(document.querySelectorAll(".tab-button")),
+  viewButtons: Array.from(document.querySelectorAll("[data-view]")),
+  views: {
+    vote: document.getElementById("voteView"),
+    results: document.getElementById("resultsView"),
+    matches: document.getElementById("matchesView")
+  },
+  refreshButton: document.getElementById("refreshButton"),
+  voteCard: document.getElementById("voteCard"),
+  emptyState: document.getElementById("emptyState"),
+  cardImage: document.getElementById("cardImage"),
+  cardCategory: document.getElementById("cardCategory"),
+  cardTitle: document.getElementById("cardTitle"),
+  cardDescription: document.getElementById("cardDescription"),
+  progressText: document.getElementById("progressText"),
+  remainingText: document.getElementById("remainingText"),
+  noButton: document.getElementById("noButton"),
+  yesButton: document.getElementById("yesButton"),
+  undoButton: document.getElementById("undoButton"),
+  sortSelect: document.getElementById("sortSelect"),
+  categorySelect: document.getElementById("categorySelect"),
+  resultsList: document.getElementById("resultsList"),
+  matchesList: document.getElementById("matchesList"),
+  matchCount: document.getElementById("matchCount"),
+  swipeCount: document.getElementById("swipeCount"),
+  sessionCount: document.getElementById("sessionCount"),
+  decisionTime: document.getElementById("decisionTime"),
+  toast: document.getElementById("toast")
+};
+
+function getSessionId() {
+  const stored = localStorage.getItem(sessionKey);
+  if (stored && sessionPattern.test(stored)) {
+    return stored;
+  }
+
+  const generated = `sv_${crypto.randomUUID()}`;
+  localStorage.setItem(sessionKey, generated);
+  return generated;
+}
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function showToast(message) {
+  elements.toast.textContent = message;
+  elements.toast.classList.add("show");
+  window.clearTimeout(showToast.timeout);
+  showToast.timeout = window.setTimeout(() => {
+    elements.toast.classList.remove("show");
+  }, 2600);
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.error || "Request failed.");
+  }
+  return data;
+}
+
+function currentItem() {
+  return state.items.find((item) => !item.userChoice) || null;
+}
+
+function votedCount() {
+  return state.items.filter((item) => item.userChoice).length;
+}
+
+async function loadItems() {
+  const data = await api(`/items?sessionId=${encodeURIComponent(state.sessionId)}`);
+  state.items = data.items;
+  renderVote();
+  preloadNextImage();
+}
+
+async function loadResults({ render = true } = {}) {
+  const data = await api(`/results?sessionId=${encodeURIComponent(state.sessionId)}`);
+  state.results = data.results;
+  state.analytics = data.analytics;
+  if (render) {
+    renderResults();
+    renderMatches();
+  }
+}
+
+function renderVote() {
+  const item = currentItem();
+  const total = state.items.length;
+  const voted = votedCount();
+
+  elements.progressText.textContent = `${voted} / ${total} voted`;
+  elements.remainingText.textContent = total === 0 ? "Loading" : `${Math.max(total - voted, 0)} left`;
+  elements.undoButton.disabled = !state.lastVote || state.isVoting;
+  elements.noButton.disabled = !item || state.isVoting;
+  elements.yesButton.disabled = !item || state.isVoting;
+
+  if (!item) {
+    elements.voteCard.hidden = true;
+    elements.emptyState.hidden = false;
+    return;
+  }
+
+  elements.emptyState.hidden = true;
+  elements.voteCard.hidden = false;
+  elements.voteCard.classList.remove("is-dragging", "fly-yes", "fly-no");
+  resetCardTransform();
+
+  elements.cardImage.src = item.imageUrl;
+  elements.cardImage.alt = item.label;
+  elements.cardCategory.textContent = item.category;
+  elements.cardTitle.textContent = item.label;
+  elements.cardDescription.textContent = item.description;
+  state.cardRenderedAt = performance.now();
+}
+
+function preloadNextImage() {
+  const next = state.items.find((item) => !item.userChoice && item.id !== currentItem()?.id);
+  if (!next) {
+    return;
+  }
+  const image = new Image();
+  image.src = next.imageUrl;
+}
+
+function setView(view) {
+  state.view = view;
+
+  for (const [name, element] of Object.entries(elements.views)) {
+    element.classList.toggle("active", name === view);
+  }
+
+  for (const tab of elements.tabs) {
+    tab.classList.toggle("active", tab.dataset.view === view);
+  }
+
+  if (view === "results" || view === "matches") {
+    loadResults().catch(() => showToast("Results could not refresh."));
+    startPolling();
+  } else {
+    stopPolling();
+  }
+}
+
+function startPolling() {
+  if (state.poller) {
+    return;
+  }
+
+  state.poller = window.setInterval(() => {
+    loadResults().catch(() => {});
+  }, 8000);
+}
+
+function stopPolling() {
+  if (state.poller) {
+    window.clearInterval(state.poller);
+    state.poller = null;
+  }
+}
+
+function resetCardTransform() {
+  const card = elements.voteCard;
+  card.style.transform = "";
+  card.style.setProperty("--yes-opacity", "0");
+  card.style.setProperty("--no-opacity", "0");
+  card.style.setProperty("--pull-opacity", "0");
+}
+
+function applyCardTransform(dx, dy) {
+  const rotate = clamp(dx / 18, -14, 14);
+  const yesOpacity = clamp(dx / 150, 0, 1);
+  const noOpacity = clamp(-dx / 150, 0, 1);
+  const pullOpacity = Math.abs(dx) < 90 ? clamp(dy / 150, 0, 1) : 0;
+
+  elements.voteCard.style.transform = `translate3d(${dx}px, ${dy}px, 0) rotate(${rotate}deg)`;
+  elements.voteCard.style.setProperty("--yes-opacity", yesOpacity.toFixed(3));
+  elements.voteCard.style.setProperty("--no-opacity", noOpacity.toFixed(3));
+  elements.voteCard.style.setProperty("--pull-opacity", pullOpacity.toFixed(3));
+}
+
+function onPointerDown(event) {
+  if (state.isVoting || !currentItem()) {
+    return;
+  }
+
+  state.drag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    dx: 0,
+    dy: 0
+  };
+
+  elements.voteCard.setPointerCapture(event.pointerId);
+  elements.voteCard.classList.add("is-dragging");
+}
+
+function onPointerMove(event) {
+  if (!state.drag || state.drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  state.drag.dx = event.clientX - state.drag.startX;
+  state.drag.dy = event.clientY - state.drag.startY;
+  applyCardTransform(state.drag.dx, state.drag.dy);
+}
+
+function onPointerUp(event) {
+  if (!state.drag || state.drag.pointerId !== event.pointerId) {
+    return;
+  }
+
+  const { dx, dy } = state.drag;
+  state.drag = null;
+  elements.voteCard.classList.remove("is-dragging");
+
+  if (elements.voteCard.hasPointerCapture(event.pointerId)) {
+    elements.voteCard.releasePointerCapture(event.pointerId);
+  }
+
+  if (dy > 120 && Math.abs(dx) < 95) {
+    resetCardTransform();
+    setView("results");
+    return;
+  }
+
+  if (dx > 96) {
+    submitVote("yes");
+    return;
+  }
+
+  if (dx < -96) {
+    submitVote("no");
+    return;
+  }
+
+  resetCardTransform();
+}
+
+function onPointerCancel(event) {
+  if (state.drag?.pointerId === event.pointerId) {
+    state.drag = null;
+    elements.voteCard.classList.remove("is-dragging");
+    resetCardTransform();
+  }
+}
+
+async function submitVote(choice) {
+  const item = currentItem();
+  if (!item || state.isVoting) {
+    return;
+  }
+
+  state.isVoting = true;
+  elements.undoButton.disabled = true;
+  elements.voteCard.classList.add(choice === "yes" ? "fly-yes" : "fly-no");
+
+  const decisionMs = Math.round(performance.now() - state.cardRenderedAt);
+  await new Promise((resolve) => window.setTimeout(resolve, 190));
+
+  try {
+    await api("/vote", {
+      method: "POST",
+      body: JSON.stringify({
+        itemId: item.id,
+        choice,
+        sessionId: state.sessionId,
+        decisionMs
+      })
+    });
+
+    item.userChoice = choice;
+    state.lastVote = { itemId: item.id, choice };
+    state.isVoting = false;
+    renderVote();
+    preloadNextImage();
+    loadResults({ render: false }).catch(() => {});
+  } catch (error) {
+    state.isVoting = false;
+    elements.voteCard.classList.remove("fly-yes", "fly-no");
+    resetCardTransform();
+    showToast(error.message);
+    renderVote();
+  }
+}
+
+async function undoLastVote() {
+  if (!state.lastVote || state.isVoting) {
+    return;
+  }
+
+  const { itemId } = state.lastVote;
+  const item = state.items.find((candidate) => candidate.id === itemId);
+  if (!item) {
+    return;
+  }
+
+  state.isVoting = true;
+  try {
+    await api("/vote", {
+      method: "DELETE",
+      body: JSON.stringify({
+        itemId,
+        sessionId: state.sessionId
+      })
+    });
+
+    item.userChoice = null;
+    state.lastVote = null;
+    state.isVoting = false;
+    renderVote();
+    loadResults({ render: false }).catch(() => {});
+  } catch (error) {
+    state.isVoting = false;
+    showToast(error.message);
+    renderVote();
+  }
+}
+
+function categoryOptions() {
+  return ["all", ...new Set(state.results.map((item) => item.category).sort())];
+}
+
+function syncCategorySelect() {
+  const options = categoryOptions();
+  const existing = Array.from(elements.categorySelect.options).map((option) => option.value);
+  if (options.join("|") === existing.join("|")) {
+    return;
+  }
+
+  elements.categorySelect.replaceChildren(
+    ...options.map((category) => {
+      const option = document.createElement("option");
+      option.value = category;
+      option.textContent = category === "all" ? "All" : category;
+      return option;
+    })
+  );
+  elements.categorySelect.value = options.includes(state.category) ? state.category : "all";
+}
+
+function sortedResults() {
+  const rows = state.results
+    .filter((item) => state.category === "all" || item.category === state.category)
+    .slice();
+
+  rows.sort((a, b) => {
+    if (state.sort === "most-divisive") {
+      return a.divisiveness - b.divisiveness || b.totalVotes - a.totalVotes || a.sortOrder - b.sortOrder;
+    }
+    if (state.sort === "most-voted") {
+      return b.totalVotes - a.totalVotes || b.yesRate - a.yesRate || a.sortOrder - b.sortOrder;
+    }
+    if (state.sort === "least-loved") {
+      return a.yesRate - b.yesRate || b.totalVotes - a.totalVotes || a.sortOrder - b.sortOrder;
+    }
+    return b.yesRate - a.yesRate || b.totalVotes - a.totalVotes || a.sortOrder - b.sortOrder;
+  });
+
+  return rows;
+}
+
+function renderResults() {
+  syncCategorySelect();
+  elements.sortSelect.value = state.sort;
+  elements.categorySelect.value = state.category;
+
+  if (state.analytics) {
+    elements.swipeCount.textContent = String(state.analytics.totalSwipes);
+    elements.sessionCount.textContent = String(state.analytics.totalSessions);
+    elements.decisionTime.textContent = state.analytics.averageDecisionMs === null
+      ? "--"
+      : (state.analytics.averageDecisionMs / 1000).toFixed(1);
+  }
+
+  const rows = sortedResults();
+  elements.resultsList.replaceChildren(
+    ...rows.map((item, index) => createResultRow(item, index + 1))
+  );
+}
+
+function renderMatches() {
+  const matches = state.results
+    .filter((item) => item.userChoice === "yes" && item.yesRate >= 70)
+    .sort((a, b) => b.yesRate - a.yesRate || b.totalVotes - a.totalVotes);
+
+  elements.matchCount.textContent = `${matches.length} ${matches.length === 1 ? "match" : "matches"}`;
+
+  if (matches.length === 0) {
+    const empty = document.createElement("article");
+    empty.className = "empty-state";
+    empty.innerHTML = `
+      <span class="empty-kicker">No matches yet</span>
+      <h2>Keep voting.</h2>
+      <p>Matches appear when your yes vote also has a global yes rate of 70% or higher.</p>
+    `;
+    elements.matchesList.replaceChildren(empty);
+    return;
+  }
+
+  elements.matchesList.replaceChildren(
+    ...matches.map((item, index) => createResultRow(item, index + 1))
+  );
+}
+
+function createResultRow(item, rank) {
+  const row = document.createElement("article");
+  row.className = "result-row";
+
+  const image = document.createElement("img");
+  image.src = item.imageUrl;
+  image.alt = item.label;
+
+  const main = document.createElement("div");
+  main.className = "result-main";
+
+  const topLine = document.createElement("div");
+  topLine.className = "result-topline";
+
+  const title = document.createElement("h3");
+  title.textContent = item.label;
+
+  const rankElement = document.createElement("span");
+  rankElement.className = "rank";
+  rankElement.textContent = `#${rank}`;
+
+  const meta = document.createElement("p");
+  meta.className = "result-meta";
+  meta.textContent = `${item.category} · ${item.totalVotes} votes`;
+
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  bar.style.setProperty("--yes-rate", `${item.yesRate}%`);
+
+  const fill = document.createElement("span");
+  bar.append(fill);
+
+  const stats = document.createElement("div");
+  stats.className = "result-stats";
+
+  const yes = document.createElement("span");
+  yes.textContent = `${item.yesRate.toFixed(1)}% yes`;
+
+  const counts = document.createElement("span");
+  counts.textContent = `${item.yesCount}Y / ${item.noCount}N`;
+
+  const userVote = document.createElement("span");
+  userVote.className = "user-vote";
+  userVote.textContent = item.userChoice ? `You: ${item.userChoice}` : "You: --";
+
+  topLine.append(title, rankElement);
+  stats.append(yes, counts, userVote);
+  main.append(topLine, meta, bar, stats);
+  row.append(image, main);
+  return row;
+}
+
+function bindEvents() {
+  elements.voteCard.addEventListener("pointerdown", onPointerDown);
+  elements.voteCard.addEventListener("pointermove", onPointerMove);
+  elements.voteCard.addEventListener("pointerup", onPointerUp);
+  elements.voteCard.addEventListener("pointercancel", onPointerCancel);
+
+  elements.noButton.addEventListener("click", () => submitVote("no"));
+  elements.yesButton.addEventListener("click", () => submitVote("yes"));
+  elements.undoButton.addEventListener("click", undoLastVote);
+
+  elements.refreshButton.addEventListener("click", () => {
+    Promise.all([loadItems(), loadResults()]).catch(() => showToast("Refresh failed."));
+  });
+
+  elements.viewButtons.forEach((button) => {
+    button.addEventListener("click", () => setView(button.dataset.view));
+  });
+
+  elements.sortSelect.addEventListener("change", () => {
+    state.sort = elements.sortSelect.value;
+    renderResults();
+  });
+
+  elements.categorySelect.addEventListener("change", () => {
+    state.category = elements.categorySelect.value;
+    renderResults();
+  });
+}
+
+async function init() {
+  bindEvents();
+  try {
+    await Promise.all([loadItems(), loadResults({ render: false })]);
+    renderResults();
+    renderMatches();
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+init();
