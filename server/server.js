@@ -349,7 +349,7 @@ function serveStatic(req, res, pathname) {
 
   res.writeHead(200, {
     "Content-Type": contentType,
-    "Cache-Control": extension === ".html" ? "no-store" : "public, max-age=3600"
+    "Cache-Control": "no-store"
   });
   createReadStream(filePath).pipe(res);
 }

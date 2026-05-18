@@ -127,8 +127,7 @@ function renderVote() {
 
   elements.emptyState.hidden = true;
   elements.voteCard.hidden = false;
-  elements.voteCard.classList.remove("is-dragging", "fly-yes", "fly-no");
-  resetCardTransform();
+  resetCardTransform({ instant: true });
 
   elements.cardImage.src = item.imageUrl;
   elements.cardImage.alt = item.label;
@@ -183,12 +182,23 @@ function stopPolling() {
   }
 }
 
-function resetCardTransform() {
+function resetCardTransform({ instant = false } = {}) {
   const card = elements.voteCard;
-  card.style.transform = "";
+  if (instant) {
+    card.classList.add("is-resetting");
+  }
+
+  card.classList.remove("is-dragging", "fly-yes", "fly-no");
+  card.style.transform = "translate3d(0, 0, 0) rotate(0deg)";
+  card.style.opacity = "1";
   card.style.setProperty("--yes-opacity", "0");
   card.style.setProperty("--no-opacity", "0");
   card.style.setProperty("--pull-opacity", "0");
+
+  if (instant) {
+    card.getBoundingClientRect();
+    card.classList.remove("is-resetting");
+  }
 }
 
 function applyCardTransform(dx, dy) {
@@ -203,11 +213,28 @@ function applyCardTransform(dx, dy) {
   elements.voteCard.style.setProperty("--pull-opacity", pullOpacity.toFixed(3));
 }
 
+function animateCardExit(choice) {
+  const direction = choice === "yes" ? 1 : -1;
+  const card = elements.voteCard;
+
+  card.classList.remove("is-dragging", "fly-yes", "fly-no");
+  card.style.setProperty("--yes-opacity", choice === "yes" ? "1" : "0");
+  card.style.setProperty("--no-opacity", choice === "no" ? "1" : "0");
+  card.style.setProperty("--pull-opacity", "0");
+  card.style.transform = `translate3d(${direction * 118}vw, -18px, 0) rotate(${direction * 16}deg)`;
+  card.style.opacity = "0";
+}
+
+function horizontalVoteThreshold() {
+  return Math.min(82, elements.voteCard.getBoundingClientRect().width * 0.22);
+}
+
 function onPointerDown(event) {
   if (state.isVoting || !currentItem()) {
     return;
   }
 
+  event.preventDefault();
   state.drag = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -225,6 +252,7 @@ function onPointerMove(event) {
     return;
   }
 
+  event.preventDefault();
   state.drag.dx = event.clientX - state.drag.startX;
   state.drag.dy = event.clientY - state.drag.startY;
   applyCardTransform(state.drag.dx, state.drag.dy);
@@ -236,6 +264,7 @@ function onPointerUp(event) {
   }
 
   const { dx, dy } = state.drag;
+  const threshold = horizontalVoteThreshold();
   state.drag = null;
   elements.voteCard.classList.remove("is-dragging");
 
@@ -243,18 +272,18 @@ function onPointerUp(event) {
     elements.voteCard.releasePointerCapture(event.pointerId);
   }
 
-  if (dy > 120 && Math.abs(dx) < 95) {
+  if (dy > 120 && Math.abs(dx) < threshold) {
     resetCardTransform();
     setView("results");
     return;
   }
 
-  if (dx > 96) {
+  if (dx > threshold) {
     submitVote("yes");
     return;
   }
 
-  if (dx < -96) {
+  if (dx < -threshold) {
     submitVote("no");
     return;
   }
@@ -278,7 +307,7 @@ async function submitVote(choice) {
 
   state.isVoting = true;
   elements.undoButton.disabled = true;
-  elements.voteCard.classList.add(choice === "yes" ? "fly-yes" : "fly-no");
+  animateCardExit(choice);
 
   const decisionMs = Math.round(performance.now() - state.cardRenderedAt);
   await new Promise((resolve) => window.setTimeout(resolve, 190));

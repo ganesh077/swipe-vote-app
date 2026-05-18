@@ -191,6 +191,10 @@ button {
   cursor: grabbing;
 }
 
+.vote-card.is-resetting {
+  transition: none;
+}
+
 .vote-card.fly-yes {
   transform: translate3d(120vw, -20px, 0) rotate(16deg);
   opacity: 0;
