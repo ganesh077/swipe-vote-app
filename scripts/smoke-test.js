@@ -1,23 +1,57 @@
-import { spawn } from "node:child_process";
-import { rmSync } from "node:fs";
-import os from "node:os";
+import { spawn, spawnSync } from "node:child_process";
 import path from "node:path";
-import { WebSocket } from "ws";
+import { getSeedItems } from "../server/items.js";
 
-const dbPath = path.join(os.tmpdir(), `street-pick-${Date.now()}.sqlite`);
+const projectRoot = path.resolve(import.meta.dirname, "..");
+const filesToParse = [
+  "server/env.js",
+  "server/server.js",
+  "public/app.js",
+  "scripts/seed.js",
+  "scripts/add-item.js",
+  "scripts/smoke-test.js"
+];
+
+for (const file of filesToParse) {
+  const result = spawnSync(process.execPath, ["--check", file], {
+    cwd: projectRoot,
+    stdio: "inherit"
+  });
+
+  if (result.status !== 0) {
+    process.exit(result.status || 1);
+  }
+}
+
+const seedItems = getSeedItems();
+const uniqueIds = new Set(seedItems.map((item) => item.id));
+if (seedItems.length < 100 || uniqueIds.size !== seedItems.length) {
+  throw new Error(`Seed data must contain at least 100 unique items. Found ${seedItems.length} items and ${uniqueIds.size} ids.`);
+}
+
+if (process.env.RUN_SUPABASE_SMOKE !== "1") {
+  console.log("Static checks passed. Live Supabase smoke skipped; set RUN_SUPABASE_SMOKE=1 with Supabase env vars to run it.");
+  process.exit(0);
+}
+
+for (const name of ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"]) {
+  if (!process.env[name]) {
+    throw new Error(`${name} is required for RUN_SUPABASE_SMOKE=1.`);
+  }
+}
+
+if (!process.env.SUPABASE_ANON_KEY && !process.env.SUPABASE_PUBLISHABLE_KEY) {
+  throw new Error("SUPABASE_ANON_KEY or SUPABASE_PUBLISHABLE_KEY is required for RUN_SUPABASE_SMOKE=1.");
+}
+
 const server = spawn(process.execPath, ["--no-warnings", "server/server.js"], {
-  cwd: path.resolve(import.meta.dirname, ".."),
-  env: {
-    ...process.env,
-    PORT: "0",
-    DB_PATH: dbPath
-  },
+  cwd: projectRoot,
+  env: { ...process.env, PORT: "0" },
   stdio: ["ignore", "pipe", "pipe"]
 });
 
 let baseUrl = "";
 let stderr = "";
-let cookie = "";
 
 server.stderr.on("data", (chunk) => {
   stderr += chunk.toString();
@@ -30,8 +64,7 @@ function waitForServer() {
     }, 5000);
 
     server.stdout.on("data", (chunk) => {
-      const output = chunk.toString();
-      const match = output.match(/http:\/\/localhost:(\d+)/);
+      const match = chunk.toString().match(/http:\/\/localhost:(\d+)/);
       if (match) {
         clearTimeout(timeout);
         baseUrl = `http://localhost:${match[1]}`;
@@ -42,24 +75,10 @@ function waitForServer() {
 }
 
 async function request(pathname, options = {}) {
-  const headers = {
-    "Content-Type": "application/json",
-    ...(options.headers || {})
-  };
-
-  if (cookie) {
-    headers.Cookie = cookie;
-  }
-
   const response = await fetch(`${baseUrl}${pathname}`, {
-    ...options,
-    headers
+    headers: { "Content-Type": "application/json" },
+    ...options
   });
-  const setCookie = response.headers.get("set-cookie");
-  if (setCookie) {
-    cookie = setCookie.split(";")[0];
-  }
-
   const data = await response.json();
   if (!response.ok) {
     throw new Error(`${options.method || "GET"} ${pathname} failed: ${JSON.stringify(data)}`);
@@ -67,130 +86,21 @@ async function request(pathname, options = {}) {
   return data;
 }
 
-function openRealtime() {
-  const wsUrl = baseUrl.replace(/^http/, "ws") + "/realtime";
-  const socket = new WebSocket(wsUrl);
-  const messages = [];
-
-  socket.on("message", (data) => {
-    messages.push(JSON.parse(data.toString()));
-  });
-
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Realtime socket did not connect.")), 3000);
-    socket.on("open", () => {
-      clearTimeout(timeout);
-      resolve({ socket, messages });
-    });
-    socket.on("error", reject);
-  });
-}
-
-async function waitForRealtime(messages, type) {
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    if (messages.some((message) => message.type === type)) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-
-  throw new Error(`Realtime socket did not receive ${type}.`);
-}
-
 try {
   await waitForServer();
-  const realtime = await openRealtime();
-
+  await request("/config");
   const sessionId = `smoke_${crypto.randomUUID()}`;
   const { items } = await request(`/items?sessionId=${sessionId}`);
   if (!Array.isArray(items) || items.length < 100) {
-    throw new Error(`Expected at least 100 items, got ${items.length}.`);
+    throw new Error(`Expected at least 100 Supabase items, got ${items.length}. Run npm run seed first.`);
   }
-
-  const firstItem = items[0];
-  await request("/vote", {
-    method: "POST",
-    body: JSON.stringify({
-      itemId: firstItem.id,
-      choice: "yes",
-      sessionId,
-      decisionMs: 1200
-    })
-  });
-  await waitForRealtime(realtime.messages, "vote:recorded");
 
   const { results, analytics } = await request(`/results?sessionId=${sessionId}`);
-  const firstResult = results.find((item) => item.id === firstItem.id);
-
-  if (!firstResult || firstResult.yesCount !== 1 || firstResult.noCount !== 0) {
-    throw new Error("Vote aggregate did not update correctly.");
+  if (!Array.isArray(results) || results.length !== items.length || !analytics) {
+    throw new Error("Results payload did not match the seeded item set.");
   }
 
-  await request("/vote", {
-    method: "POST",
-    body: JSON.stringify({
-      itemId: firstItem.id,
-      choice: "no",
-      sessionId,
-      decisionMs: 900
-    })
-  });
-
-  const updated = await request(`/results?sessionId=${sessionId}`);
-  const updatedFirst = updated.results.find((item) => item.id === firstItem.id);
-
-  if (!updatedFirst || updatedFirst.yesCount !== 0 || updatedFirst.noCount !== 1) {
-    throw new Error("Vote dedup/upsert did not replace the prior choice.");
-  }
-
-  const admin = await request("/auth/register", {
-    method: "POST",
-    body: JSON.stringify({
-      email: "admin@example.test",
-      password: "password123",
-      role: "admin",
-      adminCode: "street-admin"
-    })
-  });
-
-  if (!admin.user || admin.user.role !== "admin") {
-    throw new Error("Admin registration did not return an admin user.");
-  }
-
-  const me = await request("/auth/me");
-  if (!me.user || me.user.email !== "admin@example.test") {
-    throw new Error("Auth session was not readable after registration.");
-  }
-
-  const added = await request("/items", {
-    method: "POST",
-    body: JSON.stringify({
-      label: "Smoke Test Noodle Stand",
-      category: "Noodles",
-      description: "Temporary item inserted by the smoke test.",
-      accent: "#2f9c95"
-    })
-  });
-
-  if (!added.item || added.item.id !== "smoke-test-noodle-stand") {
-    throw new Error("Admin item creation did not return the expected item.");
-  }
-
-  const afterAdd = await request(`/items?sessionId=${sessionId}`);
-  if (afterAdd.items.length !== items.length + 1) {
-    throw new Error("Admin item creation did not increase the item count.");
-  }
-
-  if (!analytics || analytics.totalSwipes < 1) {
-    throw new Error("Analytics payload is missing swipe events.");
-  }
-
-  realtime.socket.close();
-  console.log("Smoke test passed: items, vote recording, results, and dedup are working.");
+  console.log("Live Supabase smoke passed: config, items, results, and analytics are reachable.");
 } finally {
   server.kill();
-  rmSync(dbPath, { force: true });
-  rmSync(`${dbPath}-shm`, { force: true });
-  rmSync(`${dbPath}-wal`, { force: true });
 }

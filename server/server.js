@@ -1,22 +1,25 @@
-import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { WebSocketServer } from "ws";
-import { ensureSeeded, openDatabase } from "./db.js";
+import { createClient } from "@supabase/supabase-js";
+import { loadEnv } from "./env.js";
+
+loadEnv();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const publicDir = path.join(projectRoot, "public");
 const port = Number(process.env.PORT || 3000);
-const adminCode = process.env.ADMIN_CODE || "street-admin";
 const authCookieName = "street_pick_auth";
-const db = openDatabase();
-let realtimeServer = null;
+const adminCode = process.env.ADMIN_CODE || "street-admin";
 
-ensureSeeded(db);
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_PUBLISHABLE_KEY;
+const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+let adminClient = null;
+let publicClient = null;
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -27,8 +30,40 @@ const mimeTypes = new Map([
   [".ico", "image/x-icon"]
 ]);
 
-const sessionPattern = /^[A-Za-z0-9_-]{12,80}$/;
+const sessionPattern = /^[A-Za-z0-9_-]{12,120}$/;
 const itemPattern = /^[a-z0-9-]{3,100}$/;
+
+function getSupabaseConfig() {
+  if (!supabaseUrl || !supabaseAnonKey || !supabaseServiceRoleKey) {
+    const error = new Error("Missing Supabase env vars. Set SUPABASE_URL, SUPABASE_ANON_KEY, and SUPABASE_SERVICE_ROLE_KEY.");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  return { supabaseUrl, supabaseAnonKey, supabaseServiceRoleKey };
+}
+
+function getAdminClient() {
+  const config = getSupabaseConfig();
+  if (!adminClient) {
+    adminClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+
+  return adminClient;
+}
+
+function getPublicClient() {
+  const config = getSupabaseConfig();
+  if (!publicClient) {
+    publicClient = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+      auth: { persistSession: false, autoRefreshToken: false }
+    });
+  }
+
+  return publicClient;
+}
 
 function sendJson(res, status, payload, headers = {}) {
   const body = JSON.stringify(payload);
@@ -54,20 +89,20 @@ function escapeXml(value) {
     .replace(/'/g, "&apos;");
 }
 
-function validateSessionId(sessionId) {
-  return typeof sessionId === "string" && sessionPattern.test(sessionId);
-}
-
-function validateItemId(itemId) {
-  return typeof itemId === "string" && itemPattern.test(itemId);
-}
-
 function slugify(value) {
   return String(value)
     .toLowerCase()
     .replace(/&/g, "and")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+}
+
+function validateSessionId(sessionId) {
+  return typeof sessionId === "string" && sessionPattern.test(sessionId);
+}
+
+function validateItemId(itemId) {
+  return typeof itemId === "string" && itemPattern.test(itemId);
 }
 
 function validateAccent(value) {
@@ -103,38 +138,6 @@ function validateImageUrl(value, itemId) {
   }
 }
 
-function parseCookies(req) {
-  const header = req.headers.cookie || "";
-  const cookies = new Map();
-
-  for (const part of header.split(";")) {
-    const [rawName, ...rawValue] = part.trim().split("=");
-    if (!rawName) {
-      continue;
-    }
-
-    cookies.set(rawName, decodeURIComponent(rawValue.join("=")));
-  }
-
-  return cookies;
-}
-
-function hashToken(token) {
-  return createHash("sha256").update(token).digest("hex");
-}
-
-function hashPassword(password, salt = randomBytes(16).toString("hex")) {
-  const hash = pbkdf2Sync(password, salt, 120_000, 32, "sha256").toString("hex");
-  return { salt, hash };
-}
-
-function verifyPassword(password, salt, expectedHash) {
-  const { hash } = hashPassword(password, salt);
-  const actual = Buffer.from(hash, "hex");
-  const expected = Buffer.from(expectedHash, "hex");
-  return actual.length === expected.length && timingSafeEqual(actual, expected);
-}
-
 function normalizeEmail(email) {
   return typeof email === "string" ? email.trim().toLowerCase() : "";
 }
@@ -147,82 +150,56 @@ function validatePassword(password) {
   return typeof password === "string" && password.length >= 8 && password.length <= 120;
 }
 
-function publicUser(row) {
-  if (!row) {
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const cookies = new Map();
+
+  for (const part of header.split(";")) {
+    const [rawName, ...rawValue] = part.trim().split("=");
+    if (!rawName) {
+      continue;
+    }
+    cookies.set(rawName, decodeURIComponent(rawValue.join("=")));
+  }
+
+  return cookies;
+}
+
+function encodeAuthCookie(session) {
+  return Buffer.from(JSON.stringify({
+    access_token: session.access_token,
+    refresh_token: session.refresh_token
+  })).toString("base64url");
+}
+
+function decodeAuthCookie(value) {
+  if (!value) {
     return null;
   }
 
+  try {
+    return JSON.parse(Buffer.from(value, "base64url").toString("utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function authCookie(value, maxAgeSeconds) {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  return `${authCookieName}=${encodeURIComponent(value)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}${secure}`;
+}
+
+function mapItem(row) {
   return {
     id: row.id,
-    email: row.email,
-    role: row.role
+    label: row.label,
+    description: row.description,
+    category: row.category,
+    imageUrl: row.image_url,
+    accent: row.accent,
+    sortOrder: row.sort_order,
+    userChoice: row.userChoice ?? null
   };
-}
-
-function authCookie(token, maxAgeSeconds) {
-  const encoded = encodeURIComponent(token);
-  return `${authCookieName}=${encoded}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
-}
-
-function getCurrentUser(req) {
-  const token = parseCookies(req).get(authCookieName);
-  if (!token) {
-    return null;
-  }
-
-  const tokenHash = hashToken(token);
-  const row = db.prepare(`
-    SELECT u.id, u.email, u.role
-    FROM auth_sessions s
-    JOIN users u ON u.id = s.user_id
-    WHERE s.token_hash = ? AND s.expires_at > ?
-  `).get(tokenHash, Date.now());
-
-  return publicUser(row);
-}
-
-function createAuthSession(userId) {
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = hashToken(token);
-  const maxAgeSeconds = 60 * 60 * 24 * 7;
-  const expiresAt = Date.now() + maxAgeSeconds * 1000;
-
-  db.prepare(`
-    INSERT INTO auth_sessions (token_hash, user_id, expires_at)
-    VALUES (?, ?, ?)
-  `).run(tokenHash, userId, expiresAt);
-
-  return { token, maxAgeSeconds };
-}
-
-function deleteAuthSession(req) {
-  const token = parseCookies(req).get(authCookieName);
-  if (!token) {
-    return;
-  }
-
-  db.prepare("DELETE FROM auth_sessions WHERE token_hash = ?").run(hashToken(token));
-}
-
-function realtimePayload(type = "results:update") {
-  return JSON.stringify({
-    type,
-    at: new Date().toISOString(),
-    analytics: getAnalytics()
-  });
-}
-
-function broadcastRealtime(type = "results:update") {
-  if (!realtimeServer) {
-    return;
-  }
-
-  const message = realtimePayload(type);
-  for (const client of realtimeServer.clients) {
-    if (client.readyState === 1) {
-      client.send(message);
-    }
-  }
 }
 
 async function readJson(req) {
@@ -249,218 +226,276 @@ async function readJson(req) {
   }
 }
 
-function getItemById(itemId) {
-  return db.prepare(`
-    SELECT
-      id,
-      label,
-      description,
-      category,
-      image_url AS imageUrl,
-      accent,
-      sort_order AS sortOrder
-    FROM items
-    WHERE id = ?
-  `).get(itemId);
-}
+async function getProfile(userId) {
+  const { data, error } = await getAdminClient()
+    .from("profiles")
+    .select("id,email,role")
+    .eq("id", userId)
+    .maybeSingle();
 
-function listItems(sessionId = null) {
-  if (sessionId) {
-    return db.prepare(`
-      SELECT
-        i.id,
-        i.label,
-        i.description,
-        i.category,
-        i.image_url AS imageUrl,
-        i.accent,
-        i.sort_order AS sortOrder,
-        v.choice AS userChoice
-      FROM items i
-      LEFT JOIN votes v ON v.item_id = i.id AND v.session_id = ?
-      ORDER BY i.sort_order ASC
-    `).all(sessionId);
+  if (error) {
+    throw error;
   }
 
-  return db.prepare(`
-    SELECT
-      id,
-      label,
-      description,
-      category,
-      image_url AS imageUrl,
-      accent,
-      sort_order AS sortOrder,
-      NULL AS userChoice
-    FROM items
-    ORDER BY sort_order ASC
-  `).all();
+  return data;
 }
 
-function getResults(sessionId = null) {
-  const rows = sessionId
-    ? db.prepare(`
-      SELECT
-        i.id,
-        i.label,
-        i.description,
-        i.category,
-        i.image_url AS imageUrl,
-        i.accent,
-        i.sort_order AS sortOrder,
-        SUM(CASE WHEN v.choice = 'yes' THEN 1 ELSE 0 END) AS yesCount,
-        SUM(CASE WHEN v.choice = 'no' THEN 1 ELSE 0 END) AS noCount,
-        COUNT(v.choice) AS totalVotes,
-        uv.choice AS userChoice
-      FROM items i
-      LEFT JOIN votes v ON v.item_id = i.id
-      LEFT JOIN votes uv ON uv.item_id = i.id AND uv.session_id = ?
-      GROUP BY i.id
-      ORDER BY i.sort_order ASC
-    `).all(sessionId)
-    : db.prepare(`
-      SELECT
-        i.id,
-        i.label,
-        i.description,
-        i.category,
-        i.image_url AS imageUrl,
-        i.accent,
-        i.sort_order AS sortOrder,
-        SUM(CASE WHEN v.choice = 'yes' THEN 1 ELSE 0 END) AS yesCount,
-        SUM(CASE WHEN v.choice = 'no' THEN 1 ELSE 0 END) AS noCount,
-        COUNT(v.choice) AS totalVotes,
-        NULL AS userChoice
-      FROM items i
-      LEFT JOIN votes v ON v.item_id = i.id
-      GROUP BY i.id
-      ORDER BY i.sort_order ASC
-    `).all();
+async function ensureProfile(user, role = "user") {
+  const existing = await getProfile(user.id);
+  if (existing) {
+    return existing;
+  }
 
-  return rows.map((row) => {
-    const yesCount = Number(row.yesCount || 0);
-    const noCount = Number(row.noCount || 0);
-    const totalVotes = Number(row.totalVotes || 0);
-    const yesRate = totalVotes === 0 ? 0 : Math.round((yesCount / totalVotes) * 1000) / 10;
+  const email = normalizeEmail(user.email) || "unknown@example.invalid";
+  const { data, error } = await getAdminClient()
+    .from("profiles")
+    .upsert({ id: user.id, email, role }, { onConflict: "id" })
+    .select("id,email,role")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return data;
+}
+
+function getBearerToken(req) {
+  const header = req.headers.authorization || "";
+  const [scheme, token] = header.split(/\s+/, 2);
+  return scheme?.toLowerCase() === "bearer" && token ? token : null;
+}
+
+async function getCurrentUser(req) {
+  const bearerToken = getBearerToken(req);
+  const cookieAuth = decodeAuthCookie(parseCookies(req).get(authCookieName));
+  const accessToken = bearerToken || cookieAuth?.access_token;
+
+  if (!accessToken) {
+    return null;
+  }
+
+  const { data, error } = await getPublicClient().auth.getUser(accessToken);
+  if (error || !data.user) {
+    return null;
+  }
+
+  const profile = await ensureProfile(data.user);
+  return {
+    id: data.user.id,
+    email: profile?.email || data.user.email,
+    role: profile?.role || "user"
+  };
+}
+
+async function fetchItems() {
+  const { data, error } = await getAdminClient()
+    .from("items")
+    .select("id,label,description,category,image_url,accent,sort_order")
+    .order("sort_order", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return data.map(mapItem);
+}
+
+async function fetchSessionVotes(sessionId) {
+  if (!sessionId) {
+    return new Map();
+  }
+
+  const { data, error } = await getAdminClient()
+    .from("votes")
+    .select("item_id,choice")
+    .eq("session_id", sessionId);
+
+  if (error) {
+    throw error;
+  }
+
+  return new Map(data.map((vote) => [vote.item_id, vote.choice]));
+}
+
+async function listItems(sessionId = null) {
+  const [items, userVotes] = await Promise.all([
+    fetchItems(),
+    fetchSessionVotes(sessionId)
+  ]);
+
+  return items.map((item) => ({
+    ...item,
+    userChoice: userVotes.get(item.id) || null
+  }));
+}
+
+async function getItemById(itemId) {
+  const { data, error } = await getAdminClient()
+    .from("items")
+    .select("id,label,description,category,image_url,accent,sort_order")
+    .eq("id", itemId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data ? mapItem(data) : null;
+}
+
+async function getResults(sessionId = null) {
+  const [items, userVotes, votes] = await Promise.all([
+    fetchItems(),
+    fetchSessionVotes(sessionId),
+    getAdminClient().from("votes").select("item_id,choice")
+  ]);
+
+  if (votes.error) {
+    throw votes.error;
+  }
+
+  const counts = new Map();
+  for (const vote of votes.data) {
+    const current = counts.get(vote.item_id) || { yesCount: 0, noCount: 0 };
+    if (vote.choice === "yes") {
+      current.yesCount += 1;
+    } else {
+      current.noCount += 1;
+    }
+    counts.set(vote.item_id, current);
+  }
+
+  return items.map((item) => {
+    const count = counts.get(item.id) || { yesCount: 0, noCount: 0 };
+    const totalVotes = count.yesCount + count.noCount;
+    const yesRate = totalVotes === 0 ? 0 : Math.round((count.yesCount / totalVotes) * 1000) / 10;
     const divisiveness = totalVotes === 0 ? 100 : Math.abs(50 - yesRate);
 
     return {
-      ...row,
-      yesCount,
-      noCount,
+      ...item,
+      yesCount: count.yesCount,
+      noCount: count.noCount,
       totalVotes,
+      userChoice: userVotes.get(item.id) || null,
       yesRate,
       divisiveness
     };
   });
 }
 
-function getAnalytics() {
-  const swipes = db.prepare("SELECT COUNT(*) AS count FROM vote_events").get().count;
-  const sessions = db.prepare("SELECT COUNT(*) AS count FROM sessions").get().count;
-  const avgDecisionMs = db.prepare(`
-    SELECT AVG(decision_ms) AS average
-    FROM vote_events
-    WHERE decision_ms IS NOT NULL AND decision_ms BETWEEN 0 AND 120000
-  `).get().average;
+async function getAnalytics() {
+  const client = getAdminClient();
+  const [{ data: events, error: eventError }, { data: votes, error: voteError }] = await Promise.all([
+    client.from("vote_events").select("decision_ms"),
+    client.from("votes").select("session_id")
+  ]);
+
+  if (eventError) {
+    throw eventError;
+  }
+  if (voteError) {
+    throw voteError;
+  }
+
+  const validDecisionTimes = events
+    .map((event) => event.decision_ms)
+    .filter((value) => Number.isFinite(value) && value >= 0 && value <= 120_000);
+  const averageDecisionMs = validDecisionTimes.length === 0
+    ? null
+    : Math.round(validDecisionTimes.reduce((total, value) => total + value, 0) / validDecisionTimes.length);
 
   return {
-    totalSwipes: Number(swipes || 0),
-    totalSessions: Number(sessions || 0),
-    averageDecisionMs: avgDecisionMs === null ? null : Math.round(Number(avgDecisionMs))
+    totalSwipes: events.length,
+    totalSessions: new Set(votes.map((vote) => vote.session_id)).size,
+    averageDecisionMs
   };
 }
 
-function recordVote({ itemId, choice, sessionId, decisionMs }) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`
-      INSERT INTO sessions (id, last_seen)
-      VALUES (?, CURRENT_TIMESTAMP)
-      ON CONFLICT(id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP
-    `).run(sessionId);
+function sessionIdForRequest(req, clientSessionId) {
+  return getCurrentUser(req).then((user) => ({
+    user,
+    sessionId: user ? `user_${user.id}` : clientSessionId
+  }));
+}
 
-    db.prepare(`
-      INSERT INTO votes (item_id, session_id, choice, decision_ms)
-      VALUES (?, ?, ?, ?)
-      ON CONFLICT(session_id, item_id) DO UPDATE SET
-        choice = excluded.choice,
-        decision_ms = excluded.decision_ms,
-        updated_at = CURRENT_TIMESTAMP
-    `).run(itemId, sessionId, choice, decisionMs);
+async function recordVote({ itemId, choice, sessionId, userId, decisionMs }) {
+  const client = getAdminClient();
+  const payload = {
+    item_id: itemId,
+    session_id: sessionId,
+    user_id: userId || null,
+    choice,
+    decision_ms: decisionMs,
+    updated_at: new Date().toISOString()
+  };
 
-    db.prepare(`
-      INSERT INTO vote_events (item_id, session_id, choice, decision_ms)
-      VALUES (?, ?, ?, ?)
-    `).run(itemId, sessionId, choice, decisionMs);
+  const { error } = await client
+    .from("votes")
+    .upsert(payload, { onConflict: "session_id,item_id" });
 
-    db.exec("COMMIT");
-  } catch (error) {
-    db.exec("ROLLBACK");
+  if (error) {
+    throw error;
+  }
+
+  const eventResult = await client.from("vote_events").insert({
+    item_id: itemId,
+    session_id: sessionId,
+    user_id: userId || null,
+    choice,
+    decision_ms: decisionMs
+  });
+
+  if (eventResult.error) {
+    throw eventResult.error;
+  }
+}
+
+async function deleteVote({ itemId, sessionId }) {
+  const { error } = await getAdminClient()
+    .from("votes")
+    .delete()
+    .eq("item_id", itemId)
+    .eq("session_id", sessionId);
+
+  if (error) {
     throw error;
   }
 }
 
-function deleteVote({ itemId, sessionId }) {
-  db.exec("BEGIN IMMEDIATE");
-  try {
-    db.prepare(`
-      INSERT INTO sessions (id, last_seen)
-      VALUES (?, CURRENT_TIMESTAMP)
-      ON CONFLICT(id) DO UPDATE SET last_seen = CURRENT_TIMESTAMP
-    `).run(sessionId);
+async function saveItem({ id, label, description, category, imageUrl, accent }) {
+  const client = getAdminClient();
+  const existing = await getItemById(id);
+  const sortOrder = existing?.sortOrder ?? await nextSortOrder();
+  const { error } = await client.from("items").upsert({
+    id,
+    label,
+    description,
+    category,
+    image_url: imageUrl,
+    accent,
+    sort_order: sortOrder
+  }, { onConflict: "id" });
 
-    const result = db.prepare(`
-      DELETE FROM votes
-      WHERE item_id = ? AND session_id = ?
-    `).run(itemId, sessionId);
-
-    db.exec("COMMIT");
-    return result.changes || 0;
-  } catch (error) {
-    db.exec("ROLLBACK");
+  if (error) {
     throw error;
   }
-}
-
-function saveItem({ id, label, description, category, imageUrl, accent }) {
-  const existing = getItemById(id);
-  const sortOrder = existing?.sortOrder
-    ?? db.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS sortOrder FROM items").get().sortOrder;
-
-  db.prepare(`
-    INSERT INTO items (id, label, description, category, image_url, accent, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      label = excluded.label,
-      description = excluded.description,
-      category = excluded.category,
-      image_url = excluded.image_url,
-      accent = excluded.accent,
-      sort_order = excluded.sort_order
-  `).run(id, label, description, category, imageUrl, accent, sortOrder);
 
   return getItemById(id);
 }
 
-function createUser({ email, password, role }) {
-  const id = randomUUID();
-  const { salt, hash } = hashPassword(password);
+async function nextSortOrder() {
+  const { data, error } = await getAdminClient()
+    .from("items")
+    .select("sort_order")
+    .order("sort_order", { ascending: false })
+    .limit(1);
 
-  db.prepare(`
-    INSERT INTO users (id, email, password_hash, salt, role)
-    VALUES (?, ?, ?, ?, ?)
-  `).run(id, email, hash, salt, role);
+  if (error) {
+    throw error;
+  }
 
-  return publicUser(db.prepare("SELECT id, email, role FROM users WHERE id = ?").get(id));
-}
-
-function findUserByEmail(email) {
-  return db.prepare(`
-    SELECT id, email, role, password_hash AS passwordHash, salt
-    FROM users
-    WHERE email = ?
-  `).get(email);
+  return data.length === 0 ? 1 : data[0].sort_order + 1;
 }
 
 function wrapText(value, maxLength = 18) {
@@ -563,6 +598,14 @@ function serveStatic(req, res, pathname) {
   createReadStream(filePath).pipe(res);
 }
 
+async function handleConfig(req, res) {
+  getSupabaseConfig();
+  sendJson(res, 200, {
+    supabaseUrl,
+    supabaseAnonKey
+  });
+}
+
 async function handleItems(req, res, url) {
   const sessionId = url.searchParams.get("sessionId");
 
@@ -571,14 +614,12 @@ async function handleItems(req, res, url) {
     return;
   }
 
-  sendJson(res, 200, {
-    items: listItems(sessionId),
-    total: db.prepare("SELECT COUNT(*) AS count FROM items").get().count
-  });
+  const items = await listItems(sessionId);
+  sendJson(res, 200, { items, total: items.length });
 }
 
 async function handleCreateItem(req, res) {
-  const user = getCurrentUser(req);
+  const user = await getCurrentUser(req);
   if (!user || user.role !== "admin") {
     sendError(res, 403, "Admin sign-in is required.");
     return;
@@ -623,9 +664,70 @@ async function handleCreateItem(req, res) {
     return;
   }
 
-  const item = saveItem({ id, label, description, category, imageUrl, accent });
-  broadcastRealtime("item:created");
+  const item = await saveItem({ id, label, description, category, imageUrl, accent });
   sendJson(res, 201, { ok: true, item });
+}
+
+async function handleResults(req, res, url) {
+  const sessionId = url.searchParams.get("sessionId");
+
+  if (sessionId && !validateSessionId(sessionId)) {
+    sendError(res, 400, "Invalid sessionId.");
+    return;
+  }
+
+  sendJson(res, 200, {
+    results: await getResults(sessionId),
+    analytics: await getAnalytics()
+  });
+}
+
+async function handleVote(req, res) {
+  const body = await readJson(req);
+  const itemId = body.itemId;
+  const choice = body.choice;
+  const decisionMs = Number.isFinite(Number(body.decisionMs))
+    ? Math.max(0, Math.min(120_000, Math.round(Number(body.decisionMs))))
+    : null;
+  const { user, sessionId } = await sessionIdForRequest(req, body.sessionId);
+
+  if (!validateSessionId(sessionId)) {
+    sendError(res, 400, "Invalid sessionId.");
+    return;
+  }
+
+  if (!validateItemId(itemId) || !await getItemById(itemId)) {
+    sendError(res, 400, "Unknown itemId.");
+    return;
+  }
+
+  if (choice !== "yes" && choice !== "no") {
+    sendError(res, 400, "choice must be 'yes' or 'no'.");
+    return;
+  }
+
+  await recordVote({ itemId, choice, sessionId, userId: user?.id, decisionMs });
+  const result = (await getResults(sessionId)).find((item) => item.id === itemId);
+  sendJson(res, 200, { ok: true, result });
+}
+
+async function handleDeleteVote(req, res) {
+  const body = await readJson(req);
+  const { user, sessionId } = await sessionIdForRequest(req, body.sessionId);
+  const itemId = body.itemId;
+
+  if (!validateSessionId(sessionId)) {
+    sendError(res, 400, "Invalid sessionId.");
+    return;
+  }
+
+  if (!validateItemId(itemId) || !await getItemById(itemId)) {
+    sendError(res, 400, "Unknown itemId.");
+    return;
+  }
+
+  await deleteVote({ itemId, sessionId, userId: user?.id });
+  sendJson(res, 200, { ok: true });
 }
 
 async function handleRegister(req, res) {
@@ -649,20 +751,41 @@ async function handleRegister(req, res) {
     return;
   }
 
-  try {
-    const user = createUser({ email, password, role: requestedRole });
-    const session = createAuthSession(user.id);
-    sendJson(res, 201, { ok: true, user }, {
-      "Set-Cookie": authCookie(session.token, session.maxAgeSeconds)
-    });
-  } catch (error) {
-    if (String(error.message).includes("UNIQUE constraint failed: users.email")) {
-      sendError(res, 409, "An account already exists for that email.");
-      return;
-    }
-
-    throw error;
+  const publicClient = getPublicClient();
+  const { data, error } = await publicClient.auth.signUp({ email, password });
+  if (error) {
+    sendError(res, 400, error.message);
+    return;
   }
+
+  if (!data.user) {
+    sendError(res, 400, "Supabase did not return a user.");
+    return;
+  }
+
+  const profileResult = await getAdminClient().from("profiles").upsert({
+    id: data.user.id,
+    email,
+    role: requestedRole
+  }, { onConflict: "id" });
+
+  if (profileResult.error) {
+    throw profileResult.error;
+  }
+
+  const login = await publicClient.auth.signInWithPassword({ email, password });
+  if (login.error || !login.data.session) {
+    sendJson(res, 202, {
+      ok: true,
+      user: null,
+      message: "Account created. If email confirmation is enabled, confirm the account before signing in."
+    });
+    return;
+  }
+
+  sendJson(res, 201, { ok: true, user: { id: data.user.id, email, role: requestedRole } }, {
+    "Set-Cookie": authCookie(encodeAuthCookie(login.data.session), 60 * 60 * 24 * 7)
+  });
 }
 
 async function handleLogin(req, res) {
@@ -675,92 +798,33 @@ async function handleLogin(req, res) {
     return;
   }
 
-  const user = findUserByEmail(email);
-  if (!user || !verifyPassword(password, user.salt, user.passwordHash)) {
+  const { data, error } = await getPublicClient().auth.signInWithPassword({ email, password });
+  if (error || !data.session || !data.user) {
     sendError(res, 401, "Invalid email or password.");
     return;
   }
 
-  db.prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
-  const session = createAuthSession(user.id);
-  sendJson(res, 200, { ok: true, user: publicUser(user) }, {
-    "Set-Cookie": authCookie(session.token, session.maxAgeSeconds)
+  const profile = await getProfile(data.user.id);
+  sendJson(res, 200, {
+    ok: true,
+    user: {
+      id: data.user.id,
+      email: profile?.email || data.user.email,
+      role: profile?.role || "user"
+    }
+  }, {
+    "Set-Cookie": authCookie(encodeAuthCookie(data.session), 60 * 60 * 24 * 7)
   });
 }
 
 async function handleLogout(req, res) {
-  deleteAuthSession(req);
   sendJson(res, 200, { ok: true, user: null }, {
     "Set-Cookie": authCookie("", 0)
   });
 }
 
 async function handleMe(req, res) {
-  sendJson(res, 200, { user: getCurrentUser(req) });
-}
-
-async function handleResults(req, res, url) {
-  const sessionId = url.searchParams.get("sessionId");
-
-  if (sessionId && !validateSessionId(sessionId)) {
-    sendError(res, 400, "Invalid sessionId.");
-    return;
-  }
-
-  sendJson(res, 200, {
-    results: getResults(sessionId),
-    analytics: getAnalytics()
-  });
-}
-
-async function handleVote(req, res) {
-  const body = await readJson(req);
-  const { itemId, choice, sessionId } = body;
-  const decisionMs = Number.isFinite(Number(body.decisionMs))
-    ? Math.max(0, Math.min(120_000, Math.round(Number(body.decisionMs))))
-    : null;
-
-  if (!validateSessionId(sessionId)) {
-    sendError(res, 400, "Invalid sessionId.");
-    return;
-  }
-
-  if (!validateItemId(itemId) || !getItemById(itemId)) {
-    sendError(res, 400, "Unknown itemId.");
-    return;
-  }
-
-  if (choice !== "yes" && choice !== "no") {
-    sendError(res, 400, "choice must be 'yes' or 'no'.");
-    return;
-  }
-
-  recordVote({ itemId, choice, sessionId, decisionMs });
-
-  const result = getResults(sessionId).find((item) => item.id === itemId);
-  broadcastRealtime("vote:recorded");
-  sendJson(res, 200, { ok: true, result });
-}
-
-async function handleDeleteVote(req, res) {
-  const body = await readJson(req);
-  const { itemId, sessionId } = body;
-
-  if (!validateSessionId(sessionId)) {
-    sendError(res, 400, "Invalid sessionId.");
-    return;
-  }
-
-  if (!validateItemId(itemId) || !getItemById(itemId)) {
-    sendError(res, 400, "Unknown itemId.");
-    return;
-  }
-
-  const removed = deleteVote({ itemId, sessionId });
-  if (removed > 0) {
-    broadcastRealtime("vote:deleted");
-  }
-  sendJson(res, 200, { ok: true, removed });
+  sendJson(res, 200, { user: await getCurrentUser(req) });
 }
 
 async function handleRequest(req, res) {
@@ -768,6 +832,11 @@ async function handleRequest(req, res) {
   const pathname = url.pathname;
 
   try {
+    if (req.method === "GET" && (pathname === "/api/config" || pathname === "/config")) {
+      await handleConfig(req, res);
+      return;
+    }
+
     if (req.method === "GET" && (pathname === "/api/items" || pathname === "/items")) {
       await handleItems(req, res, url);
       return;
@@ -820,7 +889,7 @@ async function handleRequest(req, res) {
         return;
       }
 
-      const item = getItemById(itemId);
+      const item = await getItemById(itemId);
       if (!item) {
         sendError(res, 404, "Image not found.");
         return;
@@ -845,29 +914,14 @@ async function handleRequest(req, res) {
   }
 }
 
-const server = http.createServer(handleRequest);
+if (process.argv[1] === __filename) {
+  const server = http.createServer(handleRequest);
 
-realtimeServer = new WebSocketServer({ noServer: true });
-
-realtimeServer.on("connection", (socket) => {
-  socket.send(realtimePayload("connected"));
-});
-
-server.on("upgrade", (req, socket, head) => {
-  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
-
-  if (url.pathname !== "/realtime") {
-    socket.destroy();
-    return;
-  }
-
-  realtimeServer.handleUpgrade(req, socket, head, (ws) => {
-    realtimeServer.emit("connection", ws, req);
+  server.listen(port, () => {
+    const address = server.address();
+    const actualPort = typeof address === "object" && address ? address.port : port;
+    console.log(`Street Pick running at http://localhost:${actualPort}`);
   });
-});
+}
 
-server.listen(port, () => {
-  const address = server.address();
-  const actualPort = typeof address === "object" && address ? address.port : port;
-  console.log(`Street Pick running at http://localhost:${actualPort}`);
-});
+export { handleRequest };

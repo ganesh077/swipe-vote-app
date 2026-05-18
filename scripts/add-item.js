@@ -1,4 +1,7 @@
-import { openDatabase } from "../server/db.js";
+import { createClient } from "@supabase/supabase-js";
+import { loadEnv } from "../server/env.js";
+
+loadEnv();
 
 function parseArgs(argv) {
   const args = {};
@@ -36,11 +39,6 @@ function fail(message) {
   console.error("");
   console.error("Usage:");
   console.error('  npm run add-item -- --label "Saffron Noodle Cart" --description "Hand-pulled noodles with chili oil." --category "Noodles" --accent "#2f9c95"');
-  console.error("");
-  console.error("Optional:");
-  console.error("  --id custom-stable-id");
-  console.error("  --image-url https://example.com/image.jpg");
-  console.error("  --sort-order 121");
   process.exit(1);
 }
 
@@ -56,17 +54,29 @@ function validateAccent(value) {
   return value;
 }
 
-function validateSortOrder(value) {
-  if (value === undefined) {
-    return null;
+function validateImageUrl(value, id) {
+  const imageUrl = value?.trim() || `/api/images/${id}.svg`;
+  if (imageUrl.startsWith("/")) {
+    return imageUrl;
   }
 
-  const number = Number(value);
-  if (!Number.isInteger(number) || number < 1) {
-    fail("--sort-order must be a positive integer.");
+  try {
+    const url = new URL(imageUrl);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return imageUrl;
+    }
+  } catch {
+    // Fall through to the user-facing error.
   }
 
-  return number;
+  fail("--image-url must be http(s) or a local path beginning with /.");
+}
+
+const supabaseUrl = process.env.SUPABASE_URL;
+const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !serviceRoleKey) {
+  fail("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
 }
 
 const args = parseArgs(process.argv.slice(2));
@@ -91,36 +101,47 @@ if (!/^[a-z0-9-]{3,100}$/.test(id)) {
   fail("--id must contain letters, numbers, or dashes after slugging.");
 }
 
+const supabase = createClient(supabaseUrl, serviceRoleKey, {
+  auth: { persistSession: false, autoRefreshToken: false }
+});
 const accent = validateAccent(args.accent);
-const db = openDatabase();
-const existing = db.prepare("SELECT sort_order AS sortOrder FROM items WHERE id = ?").get(id);
-const nextSortOrder = db.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS sortOrder FROM items").get().sortOrder;
-const sortOrder = validateSortOrder(args["sort-order"]) ?? existing?.sortOrder ?? nextSortOrder;
-const imageUrl = args["image-url"]?.trim() || `/api/images/${id}.svg`;
+const existing = await supabase
+  .from("items")
+  .select("sort_order")
+  .eq("id", id)
+  .maybeSingle();
 
-try {
-  db.prepare(`
-    INSERT INTO items (id, label, description, category, image_url, accent, sort_order)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(id) DO UPDATE SET
-      label = excluded.label,
-      description = excluded.description,
-      category = excluded.category,
-      image_url = excluded.image_url,
-      accent = excluded.accent,
-      sort_order = excluded.sort_order
-  `).run(id, label, description, category, imageUrl, accent, sortOrder);
-
-  console.log(`${existing ? "Updated" : "Added"} item: ${label}`);
-  console.log(`id: ${id}`);
-  console.log(`imageUrl: ${imageUrl}`);
-  console.log(`sortOrder: ${sortOrder}`);
-} catch (error) {
-  if (String(error.message).includes("UNIQUE constraint failed: items.sort_order")) {
-    fail(`sort_order ${sortOrder} is already used. Pick a different --sort-order or omit it.`);
-  }
-
-  throw error;
-} finally {
-  db.close();
+if (existing.error) {
+  throw existing.error;
 }
+
+const maxSortOrder = await supabase
+  .from("items")
+  .select("sort_order")
+  .order("sort_order", { ascending: false })
+  .limit(1);
+
+if (maxSortOrder.error) {
+  throw maxSortOrder.error;
+}
+
+const sortOrder = existing.data?.sort_order ?? (maxSortOrder.data[0]?.sort_order || 0) + 1;
+const imageUrl = validateImageUrl(args["image-url"], id);
+const { error } = await supabase.from("items").upsert({
+  id,
+  label,
+  description,
+  category,
+  image_url: imageUrl,
+  accent,
+  sort_order: sortOrder
+}, { onConflict: "id" });
+
+if (error) {
+  throw error;
+}
+
+console.log(`${existing.data ? "Updated" : "Added"} item: ${label}`);
+console.log(`id: ${id}`);
+console.log(`imageUrl: ${imageUrl}`);
+console.log(`sortOrder: ${sortOrder}`);

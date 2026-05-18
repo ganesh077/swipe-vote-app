@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#17202a">
     <title>Street Pick</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=7">
+    <link rel="stylesheet" href="/styles.css?v=9">
   </head>
   <body>
     <div class="app-shell">
@@ -137,6 +137,10 @@
               <button class="secondary-button" id="createUserButton" type="button">Create user</button>
               <button class="secondary-button" id="createAdminButton" type="button">Create admin</button>
             </div>
+            <div class="oauth-actions" aria-label="OAuth sign in">
+              <button class="oauth-button" id="googleButton" type="button">Google</button>
+              <button class="oauth-button" id="githubButton" type="button">GitHub</button>
+            </div>
           </form>
 
           <div class="account-card" id="accountCard" hidden>
@@ -176,6 +180,6 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=7" type="module"></script>
+    <script src="/app.js?v=9" type="module"></script>
   </body>
 </html>

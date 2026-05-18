@@ -1,0 +1,9 @@
+{
+  "rewrites": [
+    { "source": "/config", "destination": "/api/config" },
+    { "source": "/items", "destination": "/api/items" },
+    { "source": "/vote", "destination": "/api/vote" },
+    { "source": "/results", "destination": "/api/results" },
+    { "source": "/auth/:path*", "destination": "/api/auth/:path*" }
+  ]
+}

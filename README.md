@@ -2,31 +2,41 @@
 
 Street Pick is a mobile-first swipe-to-vote app for choosing which street-food pop-ups should get a weekend market slot. Users vote yes or no on generated food-truck concepts, then compare aggregate results across all sessions.
 
-## Run
+## Run Locally
 
-Requires Node 22.5+ because the app uses Node's built-in SQLite module.
+Create a Supabase project, open the SQL editor, and run `supabase/schema.sql`. Then add the server env vars:
 
 ```bash
+cp .env.example .env
+```
+
+Set `SUPABASE_URL`, `SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` in your shell or deployment environment. The service-role key is used only by the server/API layer and must not be exposed in browser code.
+
+Seed the 120 voting items:
+
+```bash
+npm install
+npm run seed -- --force
 npm start
 ```
 
 Open `http://localhost:3000`.
 
-The Account tab supports local email/password accounts. Normal users can vote with a stable account-backed session. Admin accounts can add new voting items from the same tab. For the local demo, the default admin code is `street-admin`; override it with `ADMIN_CODE=your-code npm start`.
-
 Useful commands:
 
 ```bash
-npm run seed -- --force
 npm run add-item -- --label "Saffron Noodle Cart" --description "Hand-pulled noodles with chili oil and herbs." --category "Noodles" --accent "#2f9c95"
 npm run check
+RUN_SUPABASE_SMOKE=1 npm run check
 ```
+
+`npm run check` runs static syntax checks and verifies that the seed generator still creates 100+ unique items. The live Supabase smoke check is opt-in because it depends on real project credentials and seeded rows.
 
 ## Architecture
 
-The app is intentionally small: a vanilla HTML/CSS/JS mobile frontend served by a Node HTTP server. The backend exposes `GET /items`, admin-only `POST /items`, `POST /vote`, `DELETE /vote`, `GET /results`, local auth endpoints for register/login/logout/current user, and a `/realtime` WebSocket endpoint for result updates, plus `/api/images/:id.svg` for deterministic generated item visuals. SQLite is the source of truth for items, users, auth sessions, current votes, and vote-event analytics. I chose SQLite because it keeps the local demo easy to run while still providing real persistence, transactions, constraints, and aggregate queries.
+Supabase is the source of truth for the backend: Postgres stores items, current deduped votes, vote-event analytics, and account profiles; Supabase Auth handles email/password and OAuth sessions; Supabase Realtime publishes item/vote changes to the browser. The Node code is a thin local/Vercel API facade for the required endpoints (`GET /items`, `POST /vote`, `GET /results`), generated SVG images, validation, admin-code registration, and safe use of the service-role key.
 
-Vote deduplication is handled in the database with `UNIQUE (session_id, item_id)`. `POST /vote` uses an upsert, so a later vote from the same anonymous or account-backed session on the same item replaces the prior choice instead of double-counting. The frontend stores only a guest session id in `localStorage`; account sessions use an HttpOnly server cookie, and votes/results always come from the server.
+Vote deduplication is enforced by `primary key (session_id, item_id)` on `public.votes`. `POST /vote` upserts into that table, so a user voting twice on the same item replaces the prior choice instead of double-counting. Anonymous users use a generated `sv_...` session id, while signed-in users vote through a stable `user_<supabase-user-id>` session.
 
 ## Completed Requirements
 
@@ -34,19 +44,24 @@ Vote deduplication is handled in the database with `UNIQUE (session_id, item_id)
 - Core: swipe right/left and tap Yes/No voting, with tilt, color hint, and threshold feedback.
 - Core: downward card pull and visible tabs open the aggregate results view.
 - Core: results show yes/no counts and yes rate for every item, sortable by most loved, most divisive, most voted, and least loved, with category filtering.
-- Core: backend persistence via SQLite, with basic request validation and transaction-backed writes.
+- Core: backend persistence via Supabase Postgres, with RLS enabled, request validation, and database-backed deduplication.
 - Core: end-of-deck state links to results and matches.
-- Stretch: anonymous identity, local email/password sign-in, admin/normal user roles, remembered account votes across reloads, undo last swipe, matches view, WebSocket result refresh with polling fallback, Account-tab admin UI plus seed/admin script for adding items without code changes, and basic analytics.
+- Stretch: anonymous identity, Supabase email/password sign-in, OAuth sign-in buttons, admin/normal user roles, remembered account votes across reloads, undo last swipe, matches view, Supabase Realtime result refresh with polling fallback, Account-tab admin UI plus seed/admin script for adding items without code changes, and basic analytics.
 
-## Deployment Notes
+## Deploy To Vercel
 
-This app is ready for a serverful Node host such as Render, Railway, Fly.io, or a small VM because it uses a long-lived WebSocket server and a local SQLite database. Vercel is not a good direct fit for this exact architecture: Vercel Functions do not act as WebSocket servers, and local SQLite files are not durable production storage in a serverless environment. To deploy this app on Vercel without losing functionality, replace SQLite with a hosted database and replace the in-process WebSocket server with a hosted realtime service such as Ably, Pusher, Supabase Realtime, or a separate WebSocket service.
+The repo includes `vercel.json` plus API handlers in `api/`. Set these Vercel environment variables:
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `ADMIN_CODE`
+
+For OAuth, enable the provider in Supabase Auth and add the deployed site URL to Supabase redirect URLs. The app uses Supabase Realtime instead of an in-process WebSocket server, which keeps it compatible with Vercel's serverless runtime.
 
 ## Known Issues
 
-- The app is built for a local demo, not production deployment.
-- Third-party OAuth and real email delivery are not wired because they require provider credentials and callback/SMTP configuration; the implemented local email/password auth covers the assessment's lightweight sign-in stretch.
-- The local demo admin code defaults to `street-admin`; set `ADMIN_CODE` for a less obvious value.
-- Node's built-in SQLite API is still marked experimental in Node 22, so the npm scripts run Node with `--no-warnings`.
+- OAuth buttons require Google/GitHub providers to be configured in the Supabase dashboard before they work.
+- If Supabase email confirmation is enabled, newly created email/password users must confirm before signing in.
 - Undo is limited to the most recent vote in the current browser session.
-- `npm run seed -- --force` resets the SQLite database, including votes and custom items added with `npm run add-item`.
+- `npm run seed -- --force` resets Supabase items and votes, including custom items added with the admin UI or CLI.

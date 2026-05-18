@@ -1,5 +1,7 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
 const sessionKey = "streetPickSessionId";
-const sessionPattern = /^[A-Za-z0-9_-]{12,80}$/;
+const sessionPattern = /^[A-Za-z0-9_-]{12,120}$/;
 const guestSessionId = getSessionId();
 
 const state = {
@@ -17,8 +19,8 @@ const state = {
   lastVote: null,
   cardRenderedAt: performance.now(),
   poller: null,
-  realtimeSocket: null,
-  realtimeRetry: null,
+  supabase: null,
+  realtimeChannel: null,
   realtimeConnected: false
 };
 
@@ -65,6 +67,8 @@ const elements = {
   loginButton: document.getElementById("loginButton"),
   createUserButton: document.getElementById("createUserButton"),
   createAdminButton: document.getElementById("createAdminButton"),
+  googleButton: document.getElementById("googleButton"),
+  githubButton: document.getElementById("githubButton"),
   logoutButton: document.getElementById("logoutButton"),
   accountTitle: document.getElementById("accountTitle"),
   accountCard: document.getElementById("accountCard"),
@@ -96,10 +100,46 @@ function showToast(message) {
   }, 2600);
 }
 
+async function ensureSupabase() {
+  if (state.supabase) {
+    return state.supabase;
+  }
+
+  const config = await api("/config", { skipAuth: true });
+  state.supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    }
+  });
+
+  return state.supabase;
+}
+
+async function currentAccessToken() {
+  if (!state.supabase) {
+    return null;
+  }
+
+  const { data } = await state.supabase.auth.getSession();
+  return data.session?.access_token || null;
+}
+
 async function api(path, options = {}) {
+  const { skipAuth = false, ...fetchOptions } = options;
+  const headers = { "Content-Type": "application/json", ...(fetchOptions.headers || {}) };
+
+  if (!skipAuth) {
+    const token = await currentAccessToken();
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+    }
+  }
+
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json" },
-    ...options
+    ...fetchOptions,
+    headers
   });
   const data = await response.json();
   if (!response.ok) {
@@ -237,57 +277,28 @@ function stopPolling() {
   }
 }
 
-function realtimeUrl() {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  return `${protocol}//${window.location.host}/realtime`;
-}
-
-function connectRealtime() {
-  if (!("WebSocket" in window) || state.realtimeSocket) {
+async function connectRealtime() {
+  if (state.realtimeChannel) {
     return;
   }
 
-  const socket = new WebSocket(realtimeUrl());
-  state.realtimeSocket = socket;
-
-  socket.addEventListener("open", () => {
-    state.realtimeConnected = true;
-    if (state.view === "results" || state.view === "matches") {
-      stopPolling();
-    }
-  });
-
-  socket.addEventListener("message", (event) => {
-    let message = null;
-    try {
-      message = JSON.parse(event.data);
-    } catch {
-      return;
-    }
-
-    if (message.type === "vote:recorded" || message.type === "vote:deleted" || message.type === "connected") {
+  await ensureSupabase();
+  state.realtimeChannel = state.supabase
+    .channel("street-pick-db-changes")
+    .on("postgres_changes", { event: "*", schema: "public", table: "votes" }, () => {
       loadResults().catch(() => {});
-      return;
-    }
-
-    if (message.type === "item:created") {
+    })
+    .on("postgres_changes", { event: "*", schema: "public", table: "items" }, () => {
       Promise.all([loadItems(), loadResults()]).catch(() => {});
-    }
-  });
-
-  socket.addEventListener("close", () => {
-    state.realtimeSocket = null;
-    state.realtimeConnected = false;
-    if (state.view === "results" || state.view === "matches") {
-      startPolling();
-    }
-    window.clearTimeout(state.realtimeRetry);
-    state.realtimeRetry = window.setTimeout(connectRealtime, 3000);
-  });
-
-  socket.addEventListener("error", () => {
-    socket.close();
-  });
+    })
+    .subscribe((status) => {
+      state.realtimeConnected = status === "SUBSCRIBED";
+      if (state.realtimeConnected) {
+        stopPolling();
+      } else if (state.view === "results" || state.view === "matches") {
+        startPolling();
+      }
+    });
 }
 
 function resetCardTransform({ instant = false } = {}) {
@@ -686,11 +697,20 @@ async function authenticate(mode, role = "user") {
       body: JSON.stringify(payload)
     });
 
-    setCurrentUser(data.user);
     elements.authForm.reset();
-    await Promise.all([loadItems(), loadResults()]);
-    showToast(`${mode === "login" ? "Signed in" : "Account created"} as ${data.user.role}.`);
-    setView("vote");
+    if (data.user) {
+      if (state.supabase) {
+        await state.supabase.auth.signOut();
+      }
+      setCurrentUser(data.user);
+      await Promise.all([loadItems(), loadResults()]);
+      showToast(`${mode === "login" ? "Signed in" : "Account created"} as ${data.user.role}.`);
+      setView("vote");
+      return;
+    }
+
+    setCurrentUser(null);
+    showToast(data.message || "Account created. Confirm the email before signing in.");
   } catch (error) {
     showToast(error.message);
   }
@@ -705,8 +725,29 @@ async function createAccount(role) {
   await authenticate("register", role);
 }
 
+async function signInWithOAuth(provider) {
+  try {
+    const supabase = await ensureSupabase();
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: window.location.origin
+      }
+    });
+
+    if (error) {
+      throw error;
+    }
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 async function logout() {
   try {
+    if (state.supabase) {
+      await state.supabase.auth.signOut();
+    }
     await api("/auth/logout", { method: "POST", body: JSON.stringify({}) });
     setCurrentUser(null);
     await Promise.all([loadItems(), loadResults()]);
@@ -731,6 +772,8 @@ function bindEvents() {
   elements.authForm.addEventListener("submit", submitLogin);
   elements.createUserButton.addEventListener("click", () => createAccount("user"));
   elements.createAdminButton.addEventListener("click", () => createAccount("admin"));
+  elements.googleButton.addEventListener("click", () => signInWithOAuth("google"));
+  elements.githubButton.addEventListener("click", () => signInWithOAuth("github"));
   elements.logoutButton.addEventListener("click", logout);
 
   elements.refreshButton.addEventListener("click", () => {
@@ -755,8 +798,9 @@ function bindEvents() {
 async function init() {
   bindEvents();
   try {
+    await ensureSupabase();
     await loadCurrentUser();
-    connectRealtime();
+    connectRealtime().catch(() => startPolling());
     await Promise.all([loadItems(), loadResults({ render: false })]);
     renderResults();
     renderMatches();

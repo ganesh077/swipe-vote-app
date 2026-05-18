@@ -1,7 +1,7 @@
 {
   "name": "swipe-vote-app",
   "version": "1.0.0",
-  "description": "Mobile-first swipe-to-vote web app with a Node backend and SQLite persistence.",
+  "description": "Mobile-first swipe-to-vote web app backed by Supabase Auth, Postgres, and Realtime.",
   "type": "module",
   "private": true,
   "engines": {
@@ -15,6 +15,6 @@
     "check": "node --no-warnings scripts/smoke-test.js"
   },
   "dependencies": {
-    "ws": "^8.20.1"
+    "@supabase/supabase-js": "^2.106.0"
   }
 }
