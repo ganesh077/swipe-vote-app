@@ -201,13 +201,20 @@ function resetCardTransform({ instant = false } = {}) {
   }
 }
 
+function rubberBand(value, limit) {
+  return Math.tanh(value / limit) * limit;
+}
+
 function applyCardTransform(dx, dy) {
-  const rotate = clamp(dx / 18, -14, 14);
+  const cardWidth = elements.voteCard.getBoundingClientRect().width || 360;
+  const visualDx = rubberBand(dx, cardWidth * 0.22);
+  const visualDy = clamp(dy, -48, 140);
+  const rotate = clamp(visualDx / 16, -6, 6);
   const yesOpacity = clamp(dx / 150, 0, 1);
   const noOpacity = clamp(-dx / 150, 0, 1);
-  const pullOpacity = Math.abs(dx) < 90 ? clamp(dy / 150, 0, 1) : 0;
+  const pullOpacity = Math.abs(dx) < 90 ? clamp(visualDy / 150, 0, 1) : 0;
 
-  elements.voteCard.style.transform = `translate3d(${dx}px, ${dy}px, 0) rotate(${rotate}deg)`;
+  elements.voteCard.style.transform = `translate3d(${visualDx}px, ${visualDy}px, 0) rotate(${rotate}deg)`;
   elements.voteCard.style.setProperty("--yes-opacity", yesOpacity.toFixed(3));
   elements.voteCard.style.setProperty("--no-opacity", noOpacity.toFixed(3));
   elements.voteCard.style.setProperty("--pull-opacity", pullOpacity.toFixed(3));
@@ -292,6 +299,14 @@ function onPointerUp(event) {
 }
 
 function onPointerCancel(event) {
+  if (state.drag?.pointerId === event.pointerId) {
+    state.drag = null;
+    elements.voteCard.classList.remove("is-dragging");
+    resetCardTransform();
+  }
+}
+
+function onLostPointerCapture(event) {
   if (state.drag?.pointerId === event.pointerId) {
     state.drag = null;
     elements.voteCard.classList.remove("is-dragging");
@@ -514,6 +529,7 @@ function bindEvents() {
   elements.voteCard.addEventListener("pointermove", onPointerMove);
   elements.voteCard.addEventListener("pointerup", onPointerUp);
   elements.voteCard.addEventListener("pointercancel", onPointerCancel);
+  elements.voteCard.addEventListener("lostpointercapture", onLostPointerCapture);
 
   elements.noButton.addEventListener("click", () => submitVote("no"));
   elements.yesButton.addEventListener("click", () => submitVote("yes"));
