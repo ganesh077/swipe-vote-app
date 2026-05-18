@@ -16,6 +16,7 @@ Useful commands:
 
 ```bash
 npm run seed -- --force
+npm run add-item -- --label "Saffron Noodle Cart" --description "Hand-pulled noodles with chili oil and herbs." --category "Noodles" --accent "#2f9c95"
 npm run check
 ```
 
@@ -33,10 +34,11 @@ Vote deduplication is handled in the database with `UNIQUE (session_id, item_id)
 - Core: results show yes/no counts and yes rate for every item, sortable by most loved, most divisive, most voted, and least loved, with category filtering.
 - Core: backend persistence via SQLite, with basic request validation and transaction-backed writes.
 - Core: end-of-deck state links to results and matches.
-- Stretch: anonymous identity, remembered votes across reloads, undo last swipe, matches view, polling-based result refresh, seed script, and basic analytics.
+- Stretch: anonymous identity, remembered votes across reloads, undo last swipe, matches view, polling-based result refresh, seed/admin script for adding items without code changes, and basic analytics.
 
 ## Known Issues
 
 - The app is built for a local demo, not deployment. There is no authentication beyond the anonymous session id.
 - Node's built-in SQLite API is still marked experimental in Node 22, so the npm scripts run Node with `--no-warnings`.
 - Undo is limited to the most recent vote in the current browser session.
+- `npm run seed -- --force` resets the SQLite database, including votes and custom items added with `npm run add-item`.
