@@ -1,3 +1,4 @@
+import { createHash, pbkdf2Sync, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -9,6 +10,8 @@ const __dirname = path.dirname(__filename);
 const projectRoot = path.resolve(__dirname, "..");
 const publicDir = path.join(projectRoot, "public");
 const port = Number(process.env.PORT || 3000);
+const adminCode = process.env.ADMIN_CODE || "street-admin";
+const authCookieName = "street_pick_auth";
 const db = openDatabase();
 
 ensureSeeded(db);
@@ -25,12 +28,13 @@ const mimeTypes = new Map([
 const sessionPattern = /^[A-Za-z0-9_-]{12,80}$/;
 const itemPattern = /^[a-z0-9-]{3,100}$/;
 
-function sendJson(res, status, payload) {
+function sendJson(res, status, payload, headers = {}) {
   const body = JSON.stringify(payload);
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
-    "Content-Length": Buffer.byteLength(body)
+    "Content-Length": Buffer.byteLength(body),
+    ...headers
   });
   res.end(body);
 }
@@ -95,6 +99,107 @@ function validateImageUrl(value, itemId) {
   } catch {
     return null;
   }
+}
+
+function parseCookies(req) {
+  const header = req.headers.cookie || "";
+  const cookies = new Map();
+
+  for (const part of header.split(";")) {
+    const [rawName, ...rawValue] = part.trim().split("=");
+    if (!rawName) {
+      continue;
+    }
+
+    cookies.set(rawName, decodeURIComponent(rawValue.join("=")));
+  }
+
+  return cookies;
+}
+
+function hashToken(token) {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+function hashPassword(password, salt = randomBytes(16).toString("hex")) {
+  const hash = pbkdf2Sync(password, salt, 120_000, 32, "sha256").toString("hex");
+  return { salt, hash };
+}
+
+function verifyPassword(password, salt, expectedHash) {
+  const { hash } = hashPassword(password, salt);
+  const actual = Buffer.from(hash, "hex");
+  const expected = Buffer.from(expectedHash, "hex");
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
+}
+
+function normalizeEmail(email) {
+  return typeof email === "string" ? email.trim().toLowerCase() : "";
+}
+
+function validateEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 120;
+}
+
+function validatePassword(password) {
+  return typeof password === "string" && password.length >= 8 && password.length <= 120;
+}
+
+function publicUser(row) {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: row.id,
+    email: row.email,
+    role: row.role
+  };
+}
+
+function authCookie(token, maxAgeSeconds) {
+  const encoded = encodeURIComponent(token);
+  return `${authCookieName}=${encoded}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${maxAgeSeconds}`;
+}
+
+function getCurrentUser(req) {
+  const token = parseCookies(req).get(authCookieName);
+  if (!token) {
+    return null;
+  }
+
+  const tokenHash = hashToken(token);
+  const row = db.prepare(`
+    SELECT u.id, u.email, u.role
+    FROM auth_sessions s
+    JOIN users u ON u.id = s.user_id
+    WHERE s.token_hash = ? AND s.expires_at > ?
+  `).get(tokenHash, Date.now());
+
+  return publicUser(row);
+}
+
+function createAuthSession(userId) {
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = hashToken(token);
+  const maxAgeSeconds = 60 * 60 * 24 * 7;
+  const expiresAt = Date.now() + maxAgeSeconds * 1000;
+
+  db.prepare(`
+    INSERT INTO auth_sessions (token_hash, user_id, expires_at)
+    VALUES (?, ?, ?)
+  `).run(tokenHash, userId, expiresAt);
+
+  return { token, maxAgeSeconds };
+}
+
+function deleteAuthSession(req) {
+  const token = parseCookies(req).get(authCookieName);
+  if (!token) {
+    return;
+  }
+
+  db.prepare("DELETE FROM auth_sessions WHERE token_hash = ?").run(hashToken(token));
 }
 
 async function readJson(req) {
@@ -315,6 +420,26 @@ function saveItem({ id, label, description, category, imageUrl, accent }) {
   return getItemById(id);
 }
 
+function createUser({ email, password, role }) {
+  const id = randomUUID();
+  const { salt, hash } = hashPassword(password);
+
+  db.prepare(`
+    INSERT INTO users (id, email, password_hash, salt, role)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(id, email, hash, salt, role);
+
+  return publicUser(db.prepare("SELECT id, email, role FROM users WHERE id = ?").get(id));
+}
+
+function findUserByEmail(email) {
+  return db.prepare(`
+    SELECT id, email, role, password_hash AS passwordHash, salt
+    FROM users
+    WHERE email = ?
+  `).get(email);
+}
+
 function wrapText(value, maxLength = 18) {
   const words = String(value).split(/\s+/);
   const lines = [];
@@ -430,6 +555,12 @@ async function handleItems(req, res, url) {
 }
 
 async function handleCreateItem(req, res) {
+  const user = getCurrentUser(req);
+  if (!user || user.role !== "admin") {
+    sendError(res, 403, "Admin sign-in is required.");
+    return;
+  }
+
   const body = await readJson(req);
   const label = typeof body.label === "string" ? body.label.trim() : "";
   const description = typeof body.description === "string" ? body.description.trim() : "";
@@ -471,6 +602,77 @@ async function handleCreateItem(req, res) {
 
   const item = saveItem({ id, label, description, category, imageUrl, accent });
   sendJson(res, 201, { ok: true, item });
+}
+
+async function handleRegister(req, res) {
+  const body = await readJson(req);
+  const email = normalizeEmail(body.email);
+  const password = body.password;
+  const requestedRole = body.role === "admin" ? "admin" : "user";
+
+  if (!validateEmail(email)) {
+    sendError(res, 400, "Enter a valid email address.");
+    return;
+  }
+
+  if (!validatePassword(password)) {
+    sendError(res, 400, "Password must be 8-120 characters.");
+    return;
+  }
+
+  if (requestedRole === "admin" && body.adminCode !== adminCode) {
+    sendError(res, 403, "Admin code is incorrect.");
+    return;
+  }
+
+  try {
+    const user = createUser({ email, password, role: requestedRole });
+    const session = createAuthSession(user.id);
+    sendJson(res, 201, { ok: true, user }, {
+      "Set-Cookie": authCookie(session.token, session.maxAgeSeconds)
+    });
+  } catch (error) {
+    if (String(error.message).includes("UNIQUE constraint failed: users.email")) {
+      sendError(res, 409, "An account already exists for that email.");
+      return;
+    }
+
+    throw error;
+  }
+}
+
+async function handleLogin(req, res) {
+  const body = await readJson(req);
+  const email = normalizeEmail(body.email);
+  const password = body.password;
+
+  if (!validateEmail(email) || !validatePassword(password)) {
+    sendError(res, 400, "Invalid email or password.");
+    return;
+  }
+
+  const user = findUserByEmail(email);
+  if (!user || !verifyPassword(password, user.salt, user.passwordHash)) {
+    sendError(res, 401, "Invalid email or password.");
+    return;
+  }
+
+  db.prepare("UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?").run(user.id);
+  const session = createAuthSession(user.id);
+  sendJson(res, 200, { ok: true, user: publicUser(user) }, {
+    "Set-Cookie": authCookie(session.token, session.maxAgeSeconds)
+  });
+}
+
+async function handleLogout(req, res) {
+  deleteAuthSession(req);
+  sendJson(res, 200, { ok: true, user: null }, {
+    "Set-Cookie": authCookie("", 0)
+  });
+}
+
+async function handleMe(req, res) {
+  sendJson(res, 200, { user: getCurrentUser(req) });
 }
 
 async function handleResults(req, res, url) {
@@ -545,6 +747,26 @@ async function handleRequest(req, res) {
 
     if (req.method === "POST" && (pathname === "/api/items" || pathname === "/items")) {
       await handleCreateItem(req, res);
+      return;
+    }
+
+    if (req.method === "GET" && (pathname === "/api/auth/me" || pathname === "/auth/me")) {
+      await handleMe(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && (pathname === "/api/auth/register" || pathname === "/auth/register")) {
+      await handleRegister(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && (pathname === "/api/auth/login" || pathname === "/auth/login")) {
+      await handleLogin(req, res);
+      return;
+    }
+
+    if (req.method === "POST" && (pathname === "/api/auth/logout" || pathname === "/auth/logout")) {
+      await handleLogout(req, res);
       return;
     }
 

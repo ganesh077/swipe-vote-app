@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#17202a">
     <title>Street Pick</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=5">
+    <link rel="stylesheet" href="/styles.css?v=6">
   </head>
   <body>
     <div class="app-shell">
@@ -25,7 +25,7 @@
         <button class="tab-button active" type="button" data-view="vote">Vote</button>
         <button class="tab-button" type="button" data-view="results">Results</button>
         <button class="tab-button" type="button" data-view="matches">Matches</button>
-        <button class="tab-button" type="button" data-view="admin">Add</button>
+        <button class="tab-button" type="button" data-view="account">Account</button>
       </nav>
 
       <main class="view active" id="voteView">
@@ -115,11 +115,38 @@
         <section class="results-list" id="matchesList" aria-live="polite"></section>
       </main>
 
-      <main class="view" id="adminView">
+      <main class="view" id="accountView">
         <section class="admin-panel">
-          <span class="empty-kicker">Admin</span>
-          <h2>Add a voting item</h2>
-          <form class="admin-form" id="adminForm">
+          <span class="empty-kicker">Account</span>
+          <h2 id="accountTitle">Sign in</h2>
+          <form class="admin-form auth-form" id="authForm">
+            <label>
+              <span>Email</span>
+              <input id="authEmail" name="email" type="email" maxlength="120" placeholder="you@example.com" autocomplete="email" required>
+            </label>
+            <label>
+              <span>Password</span>
+              <input id="authPassword" name="password" type="password" minlength="8" maxlength="120" autocomplete="current-password" required>
+            </label>
+            <label>
+              <span>Admin code</span>
+              <input id="authAdminCode" name="adminCode" type="password" maxlength="120" placeholder="Optional">
+            </label>
+            <div class="auth-actions">
+              <button class="primary-button" id="loginButton" type="submit">Sign in</button>
+              <button class="secondary-button" id="createUserButton" type="button">Create user</button>
+              <button class="secondary-button" id="createAdminButton" type="button">Create admin</button>
+            </div>
+          </form>
+
+          <div class="account-card" id="accountCard" hidden>
+            <p id="accountSummary"></p>
+            <button class="secondary-button" id="logoutButton" type="button">Log out</button>
+          </div>
+
+          <form class="admin-form" id="adminForm" hidden>
+            <span class="empty-kicker">Admin</span>
+            <h2>Add a voting item</h2>
             <label>
               <span>Label</span>
               <input id="adminLabel" name="label" type="text" maxlength="80" placeholder="Saffron Noodle Cart" required>
@@ -149,6 +176,6 @@
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=5" type="module"></script>
+    <script src="/app.js?v=6" type="module"></script>
   </body>
 </html>

@@ -1,11 +1,14 @@
 const sessionKey = "streetPickSessionId";
 const sessionPattern = /^[A-Za-z0-9_-]{12,80}$/;
+const guestSessionId = getSessionId();
 
 const state = {
-  sessionId: getSessionId(),
+  sessionId: guestSessionId,
   items: [],
   results: [],
   analytics: null,
+  currentUser: null,
+  guestSessionId,
   view: "vote",
   sort: "most-loved",
   category: "all",
@@ -23,7 +26,7 @@ const elements = {
     vote: document.getElementById("voteView"),
     results: document.getElementById("resultsView"),
     matches: document.getElementById("matchesView"),
-    admin: document.getElementById("adminView")
+    account: document.getElementById("accountView")
   },
   refreshButton: document.getElementById("refreshButton"),
   voteCard: document.getElementById("voteCard"),
@@ -52,6 +55,17 @@ const elements = {
   adminAccent: document.getElementById("adminAccent"),
   adminImageUrl: document.getElementById("adminImageUrl"),
   adminSubmit: document.getElementById("adminSubmit"),
+  authForm: document.getElementById("authForm"),
+  authEmail: document.getElementById("authEmail"),
+  authPassword: document.getElementById("authPassword"),
+  authAdminCode: document.getElementById("authAdminCode"),
+  loginButton: document.getElementById("loginButton"),
+  createUserButton: document.getElementById("createUserButton"),
+  createAdminButton: document.getElementById("createAdminButton"),
+  logoutButton: document.getElementById("logoutButton"),
+  accountTitle: document.getElementById("accountTitle"),
+  accountCard: document.getElementById("accountCard"),
+  accountSummary: document.getElementById("accountSummary"),
   toast: document.getElementById("toast")
 };
 
@@ -89,6 +103,36 @@ async function api(path, options = {}) {
     throw new Error(data.error || "Request failed.");
   }
   return data;
+}
+
+function sessionIdForUser(user) {
+  return user ? `user_${user.id}` : state.guestSessionId;
+}
+
+function setCurrentUser(user) {
+  state.currentUser = user;
+  state.sessionId = sessionIdForUser(user);
+  state.lastVote = null;
+  renderAccount();
+}
+
+async function loadCurrentUser() {
+  const data = await api("/auth/me");
+  setCurrentUser(data.user);
+}
+
+function renderAccount() {
+  const user = state.currentUser;
+  const isSignedIn = Boolean(user);
+  const isAdmin = user?.role === "admin";
+
+  elements.accountTitle.textContent = isSignedIn ? "Account" : "Sign in";
+  elements.authForm.hidden = isSignedIn;
+  elements.accountCard.hidden = !isSignedIn;
+  elements.adminForm.hidden = !isAdmin;
+  elements.accountSummary.textContent = isSignedIn
+    ? `${user.email} · ${user.role}`
+    : "";
 }
 
 function currentItem() {
@@ -569,6 +613,54 @@ async function submitAdminItem(event) {
   }
 }
 
+async function authenticate(mode, role = "user") {
+  const payload = {
+    email: elements.authEmail.value.trim(),
+    password: elements.authPassword.value
+  };
+
+  if (mode === "register") {
+    payload.role = role;
+    payload.adminCode = elements.authAdminCode.value;
+  }
+
+  try {
+    const data = await api(mode === "login" ? "/auth/login" : "/auth/register", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+
+    setCurrentUser(data.user);
+    elements.authForm.reset();
+    await Promise.all([loadItems(), loadResults()]);
+    showToast(`${mode === "login" ? "Signed in" : "Account created"} as ${data.user.role}.`);
+    setView("vote");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
+async function submitLogin(event) {
+  event.preventDefault();
+  await authenticate("login");
+}
+
+async function createAccount(role) {
+  await authenticate("register", role);
+}
+
+async function logout() {
+  try {
+    await api("/auth/logout", { method: "POST", body: JSON.stringify({}) });
+    setCurrentUser(null);
+    await Promise.all([loadItems(), loadResults()]);
+    showToast("Logged out.");
+    setView("vote");
+  } catch (error) {
+    showToast(error.message);
+  }
+}
+
 function bindEvents() {
   elements.voteCard.addEventListener("pointerdown", onPointerDown);
   elements.voteCard.addEventListener("pointermove", onPointerMove);
@@ -580,6 +672,10 @@ function bindEvents() {
   elements.yesButton.addEventListener("click", () => submitVote("yes"));
   elements.undoButton.addEventListener("click", undoLastVote);
   elements.adminForm.addEventListener("submit", submitAdminItem);
+  elements.authForm.addEventListener("submit", submitLogin);
+  elements.createUserButton.addEventListener("click", () => createAccount("user"));
+  elements.createAdminButton.addEventListener("click", () => createAccount("admin"));
+  elements.logoutButton.addEventListener("click", logout);
 
   elements.refreshButton.addEventListener("click", () => {
     Promise.all([loadItems(), loadResults()]).catch(() => showToast("Refresh failed."));
@@ -603,6 +699,7 @@ function bindEvents() {
 async function init() {
   bindEvents();
   try {
+    await loadCurrentUser();
     await Promise.all([loadItems(), loadResults({ render: false })]);
     renderResults();
     renderMatches();

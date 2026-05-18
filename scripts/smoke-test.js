@@ -16,6 +16,7 @@ const server = spawn(process.execPath, ["--no-warnings", "server/server.js"], {
 
 let baseUrl = "";
 let stderr = "";
+let cookie = "";
 
 server.stderr.on("data", (chunk) => {
   stderr += chunk.toString();
@@ -40,10 +41,24 @@ function waitForServer() {
 }
 
 async function request(pathname, options = {}) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(options.headers || {})
+  };
+
+  if (cookie) {
+    headers.Cookie = cookie;
+  }
+
   const response = await fetch(`${baseUrl}${pathname}`, {
-    headers: { "Content-Type": "application/json" },
-    ...options
+    ...options,
+    headers
   });
+  const setCookie = response.headers.get("set-cookie");
+  if (setCookie) {
+    cookie = setCookie.split(";")[0];
+  }
+
   const data = await response.json();
   if (!response.ok) {
     throw new Error(`${options.method || "GET"} ${pathname} failed: ${JSON.stringify(data)}`);
@@ -93,6 +108,25 @@ try {
 
   if (!updatedFirst || updatedFirst.yesCount !== 0 || updatedFirst.noCount !== 1) {
     throw new Error("Vote dedup/upsert did not replace the prior choice.");
+  }
+
+  const admin = await request("/auth/register", {
+    method: "POST",
+    body: JSON.stringify({
+      email: "admin@example.test",
+      password: "password123",
+      role: "admin",
+      adminCode: "street-admin"
+    })
+  });
+
+  if (!admin.user || admin.user.role !== "admin") {
+    throw new Error("Admin registration did not return an admin user.");
+  }
+
+  const me = await request("/auth/me");
+  if (!me.user || me.user.email !== "admin@example.test") {
+    throw new Error("Auth session was not readable after registration.");
   }
 
   const added = await request("/items", {
