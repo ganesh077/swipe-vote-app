@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { WebSocket } from "ws";
 
 const dbPath = path.join(os.tmpdir(), `street-pick-${Date.now()}.sqlite`);
 const server = spawn(process.execPath, ["--no-warnings", "server/server.js"], {
@@ -66,8 +67,40 @@ async function request(pathname, options = {}) {
   return data;
 }
 
+function openRealtime() {
+  const wsUrl = baseUrl.replace(/^http/, "ws") + "/realtime";
+  const socket = new WebSocket(wsUrl);
+  const messages = [];
+
+  socket.on("message", (data) => {
+    messages.push(JSON.parse(data.toString()));
+  });
+
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Realtime socket did not connect.")), 3000);
+    socket.on("open", () => {
+      clearTimeout(timeout);
+      resolve({ socket, messages });
+    });
+    socket.on("error", reject);
+  });
+}
+
+async function waitForRealtime(messages, type) {
+  const deadline = Date.now() + 3000;
+  while (Date.now() < deadline) {
+    if (messages.some((message) => message.type === type)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+
+  throw new Error(`Realtime socket did not receive ${type}.`);
+}
+
 try {
   await waitForServer();
+  const realtime = await openRealtime();
 
   const sessionId = `smoke_${crypto.randomUUID()}`;
   const { items } = await request(`/items?sessionId=${sessionId}`);
@@ -85,6 +118,7 @@ try {
       decisionMs: 1200
     })
   });
+  await waitForRealtime(realtime.messages, "vote:recorded");
 
   const { results, analytics } = await request(`/results?sessionId=${sessionId}`);
   const firstResult = results.find((item) => item.id === firstItem.id);
@@ -152,6 +186,7 @@ try {
     throw new Error("Analytics payload is missing swipe events.");
   }
 
+  realtime.socket.close();
   console.log("Smoke test passed: items, vote recording, results, and dedup are working.");
 } finally {
   server.kill();

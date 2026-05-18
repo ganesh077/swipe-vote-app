@@ -16,7 +16,10 @@ const state = {
   drag: null,
   lastVote: null,
   cardRenderedAt: performance.now(),
-  poller: null
+  poller: null,
+  realtimeSocket: null,
+  realtimeRetry: null,
+  realtimeConnected: false
 };
 
 const elements = {
@@ -218,7 +221,7 @@ function setView(view) {
 }
 
 function startPolling() {
-  if (state.poller) {
+  if (state.poller || state.realtimeConnected) {
     return;
   }
 
@@ -232,6 +235,59 @@ function stopPolling() {
     window.clearInterval(state.poller);
     state.poller = null;
   }
+}
+
+function realtimeUrl() {
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/realtime`;
+}
+
+function connectRealtime() {
+  if (!("WebSocket" in window) || state.realtimeSocket) {
+    return;
+  }
+
+  const socket = new WebSocket(realtimeUrl());
+  state.realtimeSocket = socket;
+
+  socket.addEventListener("open", () => {
+    state.realtimeConnected = true;
+    if (state.view === "results" || state.view === "matches") {
+      stopPolling();
+    }
+  });
+
+  socket.addEventListener("message", (event) => {
+    let message = null;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+
+    if (message.type === "vote:recorded" || message.type === "vote:deleted" || message.type === "connected") {
+      loadResults().catch(() => {});
+      return;
+    }
+
+    if (message.type === "item:created") {
+      Promise.all([loadItems(), loadResults()]).catch(() => {});
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    state.realtimeSocket = null;
+    state.realtimeConnected = false;
+    if (state.view === "results" || state.view === "matches") {
+      startPolling();
+    }
+    window.clearTimeout(state.realtimeRetry);
+    state.realtimeRetry = window.setTimeout(connectRealtime, 3000);
+  });
+
+  socket.addEventListener("error", () => {
+    socket.close();
+  });
 }
 
 function resetCardTransform({ instant = false } = {}) {
@@ -700,6 +756,7 @@ async function init() {
   bindEvents();
   try {
     await loadCurrentUser();
+    connectRealtime();
     await Promise.all([loadItems(), loadResults({ render: false })]);
     renderResults();
     renderMatches();

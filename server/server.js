@@ -3,6 +3,7 @@ import { createReadStream, existsSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { WebSocketServer } from "ws";
 import { ensureSeeded, openDatabase } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -13,6 +14,7 @@ const port = Number(process.env.PORT || 3000);
 const adminCode = process.env.ADMIN_CODE || "street-admin";
 const authCookieName = "street_pick_auth";
 const db = openDatabase();
+let realtimeServer = null;
 
 ensureSeeded(db);
 
@@ -200,6 +202,27 @@ function deleteAuthSession(req) {
   }
 
   db.prepare("DELETE FROM auth_sessions WHERE token_hash = ?").run(hashToken(token));
+}
+
+function realtimePayload(type = "results:update") {
+  return JSON.stringify({
+    type,
+    at: new Date().toISOString(),
+    analytics: getAnalytics()
+  });
+}
+
+function broadcastRealtime(type = "results:update") {
+  if (!realtimeServer) {
+    return;
+  }
+
+  const message = realtimePayload(type);
+  for (const client of realtimeServer.clients) {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  }
 }
 
 async function readJson(req) {
@@ -601,6 +624,7 @@ async function handleCreateItem(req, res) {
   }
 
   const item = saveItem({ id, label, description, category, imageUrl, accent });
+  broadcastRealtime("item:created");
   sendJson(res, 201, { ok: true, item });
 }
 
@@ -714,6 +738,7 @@ async function handleVote(req, res) {
   recordVote({ itemId, choice, sessionId, decisionMs });
 
   const result = getResults(sessionId).find((item) => item.id === itemId);
+  broadcastRealtime("vote:recorded");
   sendJson(res, 200, { ok: true, result });
 }
 
@@ -732,6 +757,9 @@ async function handleDeleteVote(req, res) {
   }
 
   const removed = deleteVote({ itemId, sessionId });
+  if (removed > 0) {
+    broadcastRealtime("vote:deleted");
+  }
   sendJson(res, 200, { ok: true, removed });
 }
 
@@ -818,6 +846,25 @@ async function handleRequest(req, res) {
 }
 
 const server = http.createServer(handleRequest);
+
+realtimeServer = new WebSocketServer({ noServer: true });
+
+realtimeServer.on("connection", (socket) => {
+  socket.send(realtimePayload("connected"));
+});
+
+server.on("upgrade", (req, socket, head) => {
+  const url = new URL(req.url, `http://${req.headers.host || "localhost"}`);
+
+  if (url.pathname !== "/realtime") {
+    socket.destroy();
+    return;
+  }
+
+  realtimeServer.handleUpgrade(req, socket, head, (ws) => {
+    realtimeServer.emit("connection", ws, req);
+  });
+});
 
 server.listen(port, () => {
   const address = server.address();

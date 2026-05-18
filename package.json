@@ -13,5 +13,8 @@
     "seed": "node --no-warnings scripts/seed.js",
     "add-item": "node --no-warnings scripts/add-item.js",
     "check": "node --no-warnings scripts/smoke-test.js"
+  },
+  "dependencies": {
+    "ws": "^8.20.1"
   }
 }
