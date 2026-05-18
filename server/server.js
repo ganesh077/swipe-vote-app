@@ -56,6 +56,47 @@ function validateItemId(itemId) {
   return typeof itemId === "string" && itemPattern.test(itemId);
 }
 
+function slugify(value) {
+  return String(value)
+    .toLowerCase()
+    .replace(/&/g, "and")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function validateAccent(value) {
+  if (!value) {
+    return "#2f9c95";
+  }
+
+  if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+function validateImageUrl(value, itemId) {
+  if (!value) {
+    return `/api/images/${itemId}.svg`;
+  }
+
+  if (typeof value !== "string" || value.length > 500) {
+    return null;
+  }
+
+  if (value.startsWith("/")) {
+    return value;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:" ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 async function readJson(req) {
   let body = "";
   for await (const chunk of req) {
@@ -254,6 +295,26 @@ function deleteVote({ itemId, sessionId }) {
   }
 }
 
+function saveItem({ id, label, description, category, imageUrl, accent }) {
+  const existing = getItemById(id);
+  const sortOrder = existing?.sortOrder
+    ?? db.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS sortOrder FROM items").get().sortOrder;
+
+  db.prepare(`
+    INSERT INTO items (id, label, description, category, image_url, accent, sort_order)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      label = excluded.label,
+      description = excluded.description,
+      category = excluded.category,
+      image_url = excluded.image_url,
+      accent = excluded.accent,
+      sort_order = excluded.sort_order
+  `).run(id, label, description, category, imageUrl, accent, sortOrder);
+
+  return getItemById(id);
+}
+
 function wrapText(value, maxLength = 18) {
   const words = String(value).split(/\s+/);
   const lines = [];
@@ -368,6 +429,50 @@ async function handleItems(req, res, url) {
   });
 }
 
+async function handleCreateItem(req, res) {
+  const body = await readJson(req);
+  const label = typeof body.label === "string" ? body.label.trim() : "";
+  const description = typeof body.description === "string" ? body.description.trim() : "";
+  const category = typeof body.category === "string" ? body.category.trim() : "";
+  const requestedId = typeof body.id === "string" ? body.id.trim() : "";
+  const id = requestedId ? slugify(requestedId) : slugify(label);
+  const accent = validateAccent(body.accent);
+  const imageUrl = validateImageUrl(body.imageUrl, id);
+
+  if (label.length < 3 || label.length > 80) {
+    sendError(res, 400, "Label must be 3-80 characters.");
+    return;
+  }
+
+  if (description.length < 8 || description.length > 240) {
+    sendError(res, 400, "Description must be 8-240 characters.");
+    return;
+  }
+
+  if (category.length < 2 || category.length > 40) {
+    sendError(res, 400, "Category must be 2-40 characters.");
+    return;
+  }
+
+  if (!validateItemId(id)) {
+    sendError(res, 400, "Item id must become a 3-100 character slug.");
+    return;
+  }
+
+  if (!accent) {
+    sendError(res, 400, "Accent must be a hex color like #2f9c95.");
+    return;
+  }
+
+  if (!imageUrl) {
+    sendError(res, 400, "Image URL must be http(s) or a local path.");
+    return;
+  }
+
+  const item = saveItem({ id, label, description, category, imageUrl, accent });
+  sendJson(res, 201, { ok: true, item });
+}
+
 async function handleResults(req, res, url) {
   const sessionId = url.searchParams.get("sessionId");
 
@@ -435,6 +540,11 @@ async function handleRequest(req, res) {
   try {
     if (req.method === "GET" && (pathname === "/api/items" || pathname === "/items")) {
       await handleItems(req, res, url);
+      return;
+    }
+
+    if (req.method === "POST" && (pathname === "/api/items" || pathname === "/items")) {
+      await handleCreateItem(req, res);
       return;
     }
 

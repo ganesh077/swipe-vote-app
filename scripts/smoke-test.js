@@ -95,6 +95,25 @@ try {
     throw new Error("Vote dedup/upsert did not replace the prior choice.");
   }
 
+  const added = await request("/items", {
+    method: "POST",
+    body: JSON.stringify({
+      label: "Smoke Test Noodle Stand",
+      category: "Noodles",
+      description: "Temporary item inserted by the smoke test.",
+      accent: "#2f9c95"
+    })
+  });
+
+  if (!added.item || added.item.id !== "smoke-test-noodle-stand") {
+    throw new Error("Admin item creation did not return the expected item.");
+  }
+
+  const afterAdd = await request(`/items?sessionId=${sessionId}`);
+  if (afterAdd.items.length !== items.length + 1) {
+    throw new Error("Admin item creation did not increase the item count.");
+  }
+
   if (!analytics || analytics.totalSwipes < 1) {
     throw new Error("Analytics payload is missing swipe events.");
   }

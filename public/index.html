@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#17202a">
     <title>Street Pick</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/styles.css?v=4">
+    <link rel="stylesheet" href="/styles.css?v=5">
   </head>
   <body>
     <div class="app-shell">
@@ -25,6 +25,7 @@
         <button class="tab-button active" type="button" data-view="vote">Vote</button>
         <button class="tab-button" type="button" data-view="results">Results</button>
         <button class="tab-button" type="button" data-view="matches">Matches</button>
+        <button class="tab-button" type="button" data-view="admin">Add</button>
       </nav>
 
       <main class="view active" id="voteView">
@@ -113,9 +114,41 @@
         </section>
         <section class="results-list" id="matchesList" aria-live="polite"></section>
       </main>
+
+      <main class="view" id="adminView">
+        <section class="admin-panel">
+          <span class="empty-kicker">Admin</span>
+          <h2>Add a voting item</h2>
+          <form class="admin-form" id="adminForm">
+            <label>
+              <span>Label</span>
+              <input id="adminLabel" name="label" type="text" maxlength="80" placeholder="Saffron Noodle Cart" required>
+            </label>
+            <label>
+              <span>Category</span>
+              <input id="adminCategory" name="category" type="text" maxlength="40" placeholder="Noodles" required>
+            </label>
+            <label>
+              <span>Description</span>
+              <textarea id="adminDescription" name="description" maxlength="240" placeholder="Hand-pulled noodles with chili oil and herbs." required></textarea>
+            </label>
+            <div class="admin-grid">
+              <label>
+                <span>Accent</span>
+                <input id="adminAccent" name="accent" type="color" value="#2f9c95" aria-label="Accent color">
+              </label>
+              <label>
+                <span>Image URL</span>
+                <input id="adminImageUrl" name="imageUrl" type="url" placeholder="Optional">
+              </label>
+            </div>
+            <button class="primary-button" id="adminSubmit" type="submit">Add item</button>
+          </form>
+        </section>
+      </main>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script src="/app.js?v=4" type="module"></script>
+    <script src="/app.js?v=5" type="module"></script>
   </body>
 </html>

@@ -22,7 +22,7 @@ npm run check
 
 ## Architecture
 
-The app is intentionally small: a vanilla HTML/CSS/JS mobile frontend served by a Node HTTP server. The backend exposes `GET /items`, `POST /vote`, `DELETE /vote`, and `GET /results`, plus `/api/images/:id.svg` for deterministic generated item visuals. SQLite is the source of truth for items, sessions, current votes, and vote-event analytics. I chose SQLite because it keeps the local demo easy to run while still providing real persistence, transactions, constraints, and aggregate queries.
+The app is intentionally small: a vanilla HTML/CSS/JS mobile frontend served by a Node HTTP server. The backend exposes `GET /items`, `POST /items`, `POST /vote`, `DELETE /vote`, and `GET /results`, plus `/api/images/:id.svg` for deterministic generated item visuals. SQLite is the source of truth for items, sessions, current votes, and vote-event analytics. I chose SQLite because it keeps the local demo easy to run while still providing real persistence, transactions, constraints, and aggregate queries.
 
 Vote deduplication is handled in the database with `UNIQUE (session_id, item_id)`. `POST /vote` uses an upsert, so a later vote from the same anonymous session on the same item replaces the prior choice instead of double-counting. The frontend stores only an anonymous session id in `localStorage`; votes and results always come from the server.
 
@@ -34,11 +34,12 @@ Vote deduplication is handled in the database with `UNIQUE (session_id, item_id)
 - Core: results show yes/no counts and yes rate for every item, sortable by most loved, most divisive, most voted, and least loved, with category filtering.
 - Core: backend persistence via SQLite, with basic request validation and transaction-backed writes.
 - Core: end-of-deck state links to results and matches.
-- Stretch: anonymous identity, remembered votes across reloads, undo last swipe, matches view, polling-based result refresh, seed/admin script for adding items without code changes, and basic analytics.
+- Stretch: anonymous identity, remembered votes across reloads, undo last swipe, matches view, polling-based result refresh, Add-tab admin UI plus seed/admin script for adding items without code changes, and basic analytics.
 
 ## Known Issues
 
 - The app is built for a local demo, not deployment. There is no authentication beyond the anonymous session id.
+- The Add tab is intentionally unauthenticated for the local assessment demo; a deployed version would protect it.
 - Node's built-in SQLite API is still marked experimental in Node 22, so the npm scripts run Node with `--no-warnings`.
 - Undo is limited to the most recent vote in the current browser session.
 - `npm run seed -- --force` resets the SQLite database, including votes and custom items added with `npm run add-item`.

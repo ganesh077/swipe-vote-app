@@ -22,7 +22,8 @@ const elements = {
   views: {
     vote: document.getElementById("voteView"),
     results: document.getElementById("resultsView"),
-    matches: document.getElementById("matchesView")
+    matches: document.getElementById("matchesView"),
+    admin: document.getElementById("adminView")
   },
   refreshButton: document.getElementById("refreshButton"),
   voteCard: document.getElementById("voteCard"),
@@ -44,6 +45,13 @@ const elements = {
   swipeCount: document.getElementById("swipeCount"),
   sessionCount: document.getElementById("sessionCount"),
   decisionTime: document.getElementById("decisionTime"),
+  adminForm: document.getElementById("adminForm"),
+  adminLabel: document.getElementById("adminLabel"),
+  adminCategory: document.getElementById("adminCategory"),
+  adminDescription: document.getElementById("adminDescription"),
+  adminAccent: document.getElementById("adminAccent"),
+  adminImageUrl: document.getElementById("adminImageUrl"),
+  adminSubmit: document.getElementById("adminSubmit"),
   toast: document.getElementById("toast")
 };
 
@@ -524,6 +532,43 @@ function createResultRow(item, rank) {
   return row;
 }
 
+async function submitAdminItem(event) {
+  event.preventDefault();
+
+  const payload = {
+    label: elements.adminLabel.value.trim(),
+    category: elements.adminCategory.value.trim(),
+    description: elements.adminDescription.value.trim(),
+    accent: elements.adminAccent.value,
+    imageUrl: elements.adminImageUrl.value.trim()
+  };
+
+  if (!payload.imageUrl) {
+    delete payload.imageUrl;
+  }
+
+  elements.adminSubmit.disabled = true;
+  elements.adminSubmit.textContent = "Adding...";
+
+  try {
+    const data = await api("/items", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+
+    elements.adminForm.reset();
+    elements.adminAccent.value = "#2f9c95";
+    await Promise.all([loadItems(), loadResults()]);
+    showToast(`Added ${data.item.label}.`);
+    setView("vote");
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    elements.adminSubmit.disabled = false;
+    elements.adminSubmit.textContent = "Add item";
+  }
+}
+
 function bindEvents() {
   elements.voteCard.addEventListener("pointerdown", onPointerDown);
   elements.voteCard.addEventListener("pointermove", onPointerMove);
@@ -534,6 +579,7 @@ function bindEvents() {
   elements.noButton.addEventListener("click", () => submitVote("no"));
   elements.yesButton.addEventListener("click", () => submitVote("yes"));
   elements.undoButton.addEventListener("click", undoLastVote);
+  elements.adminForm.addEventListener("submit", submitAdminItem);
 
   elements.refreshButton.addEventListener("click", () => {
     Promise.all([loadItems(), loadResults()]).catch(() => showToast("Refresh failed."));

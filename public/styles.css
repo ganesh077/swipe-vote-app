@@ -84,6 +84,7 @@ button {
 .brand p,
 .matches-header h2,
 .matches-header p,
+.admin-panel h2,
 .empty-state h2,
 .empty-state p {
   margin: 0;
@@ -115,7 +116,7 @@ button {
 
 .view-tabs {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   padding: 0 18px 12px;
 }
@@ -126,7 +127,7 @@ button {
   background: rgba(255, 255, 255, 0.62);
   color: var(--muted);
   height: 38px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -542,8 +543,72 @@ button {
   color: #1e6d67;
 }
 
-.matches-header {
+.matches-header,
+.admin-panel {
   margin: 0 18px 12px;
+}
+
+.admin-panel {
+  border-radius: 8px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  padding: 18px;
+  box-shadow: 0 14px 32px rgba(23, 32, 42, 0.12);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.admin-panel h2 {
+  margin-top: 12px;
+  font-size: 24px;
+  line-height: 1.08;
+  letter-spacing: 0;
+}
+
+.admin-form {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.admin-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.admin-form input,
+.admin-form textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fffdfa;
+  color: var(--ink);
+  padding: 11px 12px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 650;
+  text-transform: none;
+}
+
+.admin-form textarea {
+  min-height: 94px;
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.admin-form input[type="color"] {
+  height: 46px;
+  padding: 5px;
+}
+
+.admin-grid {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 10px;
 }
 
 .toast {
