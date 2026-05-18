@@ -207,9 +207,9 @@ function rubberBand(value, limit) {
 
 function applyCardTransform(dx, dy) {
   const cardWidth = elements.voteCard.getBoundingClientRect().width || 360;
-  const visualDx = rubberBand(dx, cardWidth * 0.22);
-  const visualDy = clamp(dy, -48, 140);
-  const rotate = clamp(visualDx / 16, -6, 6);
+  const visualDx = rubberBand(dx, cardWidth * 0.62);
+  const visualDy = clamp(dy, -80, 170);
+  const rotate = clamp(visualDx / 18, -14, 14);
   const yesOpacity = clamp(dx / 150, 0, 1);
   const noOpacity = clamp(-dx / 150, 0, 1);
   const pullOpacity = Math.abs(dx) < 90 ? clamp(visualDy / 150, 0, 1) : 0;
