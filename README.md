@@ -22,6 +22,8 @@ npm start
 
 Open `http://localhost:3000`.
 
+Live demo: `https://swipe-vote-app.vercel.app`.
+
 Useful commands:
 
 ```bash
@@ -59,6 +61,10 @@ The repo includes `vercel.json` plus API handlers in `api/`. Set these Vercel en
 - `PUBLIC_SITE_URL` set to the deployed app URL, for example `https://swipe-vote-app.vercel.app`
 
 The app uses Supabase Realtime instead of an in-process WebSocket server, which keeps it compatible with Vercel's serverless runtime.
+
+## Data And Image Sources
+
+The 120 starter items are generated food-pop-up concepts from `server/items.js` and seeded by `scripts/seed.js`. Their default visuals are generated inline SVG cards created by the app code, not photos of real people or third-party assets. Admin-added items may optionally use a user-supplied image URL.
 
 In Supabase, also set Authentication -> URL Configuration:
 
