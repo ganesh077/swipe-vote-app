@@ -813,7 +813,7 @@ async function handleRegister(req, res) {
     sendJson(res, 202, {
       ok: true,
       user: null,
-      message: "Account created. If email confirmation is enabled, confirm the account before signing in."
+      message: `Confirmation email sent to ${email}. Confirm the account, then return here to sign in.`
     });
     return;
   }

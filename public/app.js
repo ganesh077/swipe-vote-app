@@ -64,6 +64,7 @@ const elements = {
   authEmail: document.getElementById("authEmail"),
   authPassword: document.getElementById("authPassword"),
   authAdminCode: document.getElementById("authAdminCode"),
+  authStatus: document.getElementById("authStatus"),
   loginButton: document.getElementById("loginButton"),
   createUserButton: document.getElementById("createUserButton"),
   createAdminButton: document.getElementById("createAdminButton"),
@@ -71,6 +72,7 @@ const elements = {
   accountTitle: document.getElementById("accountTitle"),
   accountCard: document.getElementById("accountCard"),
   accountSummary: document.getElementById("accountSummary"),
+  accountRoleHint: document.getElementById("accountRoleHint"),
   toast: document.getElementById("toast")
 };
 
@@ -96,6 +98,11 @@ function showToast(message) {
   showToast.timeout = window.setTimeout(() => {
     elements.toast.classList.remove("show");
   }, 2600);
+}
+
+function setAuthStatus(message = "") {
+  elements.authStatus.textContent = message;
+  elements.authStatus.hidden = !message;
 }
 
 async function ensureSupabase() {
@@ -177,6 +184,9 @@ function renderAccount() {
   elements.accountSummary.textContent = isSignedIn
     ? `${user.email} · ${user.role}`
     : "";
+  elements.accountRoleHint.textContent = isAdmin
+    ? "Admin tools are available below."
+    : "Signed in as a normal user. Admin tools are hidden.";
 }
 
 function currentItem() {
@@ -682,6 +692,7 @@ async function submitAdminItem(event) {
 }
 
 async function authenticate(mode, role = "user") {
+  setAuthStatus("");
   const payload = {
     email: elements.authEmail.value.trim(),
     password: elements.authPassword.value
@@ -698,21 +709,27 @@ async function authenticate(mode, role = "user") {
       body: JSON.stringify(payload)
     });
 
-    elements.authForm.reset();
     if (data.user) {
       if (state.supabase) {
         await state.supabase.auth.signOut();
       }
       setCurrentUser(data.user);
       await Promise.all([loadItems(), loadResults()]);
+      setAuthStatus("");
+      elements.authForm.reset();
       showToast(`${mode === "login" ? "Signed in" : "Account created"} as ${data.user.role}.`);
       setView("vote");
       return;
     }
 
     setCurrentUser(null);
-    showToast(data.message || "Account created. Confirm the email before signing in.");
+    elements.authPassword.value = "";
+    elements.authAdminCode.value = "";
+    const message = data.message || "Confirmation email sent. Confirm the account, then return here to sign in.";
+    setAuthStatus(message);
+    showToast(message);
   } catch (error) {
+    setAuthStatus(error.message);
     showToast(error.message);
   }
 }

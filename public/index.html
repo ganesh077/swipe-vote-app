@@ -130,17 +130,19 @@
             </label>
             <label>
               <span>Admin code</span>
-              <input id="authAdminCode" name="adminCode" type="password" maxlength="120" placeholder="Optional">
+              <input id="authAdminCode" name="adminCode" type="password" maxlength="120" placeholder="Required for admin">
             </label>
             <div class="auth-actions">
               <button class="primary-button" id="loginButton" type="submit">Sign in</button>
-              <button class="secondary-button" id="createUserButton" type="button">Create user</button>
-              <button class="secondary-button" id="createAdminButton" type="button">Create admin</button>
+              <button class="secondary-button" id="createUserButton" type="button">Create normal user</button>
+              <button class="secondary-button" id="createAdminButton" type="button">Create admin with code</button>
             </div>
+            <p class="auth-status" id="authStatus" role="status" aria-live="polite"></p>
           </form>
 
           <div class="account-card" id="accountCard" hidden>
             <p id="accountSummary"></p>
+            <p class="account-role-hint" id="accountRoleHint"></p>
             <button class="secondary-button" id="logoutButton" type="button">Log out</button>
           </div>
 
