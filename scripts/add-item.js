@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { loadEnv } from "../server/env.js";
+import { imageDataUrl } from "../server/items.js";
 
 loadEnv();
 
@@ -126,7 +127,9 @@ if (maxSortOrder.error) {
 }
 
 const sortOrder = existing.data?.sort_order ?? (maxSortOrder.data[0]?.sort_order || 0) + 1;
-const imageUrl = validateImageUrl(args["image-url"], id);
+const imageUrl = args["image-url"]
+  ? validateImageUrl(args["image-url"], id)
+  : imageDataUrl({ id, label, description, category, accent, sortOrder });
 const { error } = await supabase.from("items").upsert({
   id,
   label,

@@ -160,6 +160,25 @@ function sentenceCase(value) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function imageDataUrl(item) {
+  const accent = /^#[0-9a-fA-F]{6}$/.test(item.accent) ? item.accent : "#2f9c95";
+  const shadow = "#17202a";
+  const label = escapeXml(item.label);
+  const category = escapeXml(item.category.toUpperCase());
+  const patternOffset = (item.sortOrder % 7) * 18;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1120" viewBox="0 0 900 1120"><rect width="900" height="1120" fill="#f7f1e6"/><rect x="42" y="42" width="816" height="1036" rx="34" fill="${accent}"/><path d="M${patternOffset} 0h28v1120h-28zM${patternOffset + 180} 0h28v1120h-28zM${patternOffset + 360} 0h28v1120h-28zM${patternOffset + 540} 0h28v1120h-28zM${patternOffset + 720} 0h28v1120h-28z" fill="#fff" opacity=".13"/><circle cx="450" cy="362" r="198" fill="#fff" opacity=".92"/><circle cx="450" cy="362" r="126" fill="${accent}"/><path d="M260 672c110-86 270-86 380 0l52 126c-128 76-356 76-484 0z" fill="#fff" opacity=".94"/><path d="M278 674c112 58 232 58 344 0" fill="none" stroke="${shadow}" stroke-width="24" stroke-linecap="round" opacity=".72"/><text x="450" y="385" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="68" font-weight="800" fill="#fff">${category}</text><text x="450" y="888" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="58" font-weight="800" fill="#fff">${label}</text><text x="450" y="1008" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#fff" opacity=".72">STREET PICK</text></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+}
+
 export function getSeedItems() {
   const items = [];
 
@@ -169,17 +188,23 @@ export function getSeedItems() {
       const label = `${edition.prefix} ${concept.dish}`;
       const id = slugify(label);
 
-      items.push({
+      const item = {
         id,
         label,
         description: `${sentenceCase(concept.detail)}, finished with ${edition.finish}.`,
         category: concept.category,
-        imageUrl: `/api/images/${id}.svg`,
         accent: concept.accent,
         sortOrder
+      };
+
+      items.push({
+        ...item,
+        imageUrl: imageDataUrl(item)
       });
     }
   }
 
   return items;
 }
+
+export { imageDataUrl };
