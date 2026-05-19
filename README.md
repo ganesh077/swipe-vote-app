@@ -34,7 +34,7 @@ RUN_SUPABASE_SMOKE=1 npm run check
 
 ## Architecture
 
-Supabase is the source of truth for the backend: Postgres stores items, current deduped votes, vote-event analytics, and account profiles; Supabase Auth handles email/password and OAuth sessions; Supabase Realtime publishes item/vote changes to the browser. The Node code is a thin local/Vercel API facade for the required endpoints (`GET /items`, `POST /vote`, `GET /results`), generated SVG images, validation, admin-code registration, and safe use of the service-role key.
+Supabase is the source of truth for the backend: Postgres stores items, current deduped votes, vote-event analytics, and account profiles; Supabase Auth handles email/password accounts; Supabase Realtime publishes item/vote changes to the browser. The Node code is a thin local/Vercel API facade for the required endpoints (`GET /items`, `POST /vote`, `GET /results`), generated SVG images, validation, admin-code registration, and safe use of the service-role key.
 
 Vote deduplication is enforced by `primary key (session_id, item_id)` on `public.votes`. `POST /vote` upserts into that table, so a user voting twice on the same item replaces the prior choice instead of double-counting. Anonymous users use a generated `sv_...` session id, while signed-in users vote through a stable `user_<supabase-user-id>` session.
 
@@ -46,7 +46,7 @@ Vote deduplication is enforced by `primary key (session_id, item_id)` on `public
 - Core: results show yes/no counts and yes rate for every item, sortable by most loved, most divisive, most voted, and least loved, with category filtering.
 - Core: backend persistence via Supabase Postgres, with RLS enabled, request validation, and database-backed deduplication.
 - Core: end-of-deck state links to results and matches.
-- Stretch: anonymous identity, Supabase email/password sign-in, OAuth sign-in buttons, admin/normal user roles, remembered account votes across reloads, undo last swipe, matches view, Supabase Realtime result refresh with polling fallback, Account-tab admin UI plus seed/admin script for adding items without code changes, and basic analytics.
+- Stretch: anonymous identity, Supabase email/password sign-in, admin/normal user roles, remembered account votes across reloads, undo last swipe, matches view, Supabase Realtime result refresh with polling fallback, Account-tab admin UI plus seed/admin script for adding items without code changes, and basic analytics.
 
 ## Deploy To Vercel
 
@@ -57,11 +57,10 @@ The repo includes `vercel.json` plus API handlers in `api/`. Set these Vercel en
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ADMIN_CODE`
 
-For OAuth, enable the provider in Supabase Auth and add the deployed site URL to Supabase redirect URLs. The app uses Supabase Realtime instead of an in-process WebSocket server, which keeps it compatible with Vercel's serverless runtime.
+The app uses Supabase Realtime instead of an in-process WebSocket server, which keeps it compatible with Vercel's serverless runtime.
 
 ## Known Issues
 
-- OAuth buttons require Google/GitHub providers to be configured in the Supabase dashboard before they work.
 - If Supabase email confirmation is enabled, newly created email/password users must confirm before signing in.
 - Undo is limited to the most recent vote in the current browser session.
 - `npm run seed -- --force` resets Supabase items and votes, including custom items added with the admin UI or CLI.

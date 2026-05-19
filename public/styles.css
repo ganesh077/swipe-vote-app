@@ -620,21 +620,6 @@ button {
   gap: 10px;
 }
 
-.oauth-actions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.oauth-button {
-  height: 46px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #fffdfa;
-  color: var(--ink);
-  font-weight: 900;
-}
-
 .account-card {
   display: grid;
   gap: 12px;

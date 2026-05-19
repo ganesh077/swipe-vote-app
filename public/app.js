@@ -67,8 +67,6 @@ const elements = {
   loginButton: document.getElementById("loginButton"),
   createUserButton: document.getElementById("createUserButton"),
   createAdminButton: document.getElementById("createAdminButton"),
-  googleButton: document.getElementById("googleButton"),
-  githubButton: document.getElementById("githubButton"),
   logoutButton: document.getElementById("logoutButton"),
   accountTitle: document.getElementById("accountTitle"),
   accountCard: document.getElementById("accountCard"),
@@ -728,24 +726,6 @@ async function createAccount(role) {
   await authenticate("register", role);
 }
 
-async function signInWithOAuth(provider) {
-  try {
-    const supabase = await ensureSupabase();
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: window.location.origin
-      }
-    });
-
-    if (error) {
-      throw error;
-    }
-  } catch (error) {
-    showToast(error.message);
-  }
-}
-
 async function logout() {
   try {
     if (state.supabase) {
@@ -775,8 +755,6 @@ function bindEvents() {
   elements.authForm.addEventListener("submit", submitLogin);
   elements.createUserButton.addEventListener("click", () => createAccount("user"));
   elements.createAdminButton.addEventListener("click", () => createAccount("admin"));
-  elements.googleButton.addEventListener("click", () => signInWithOAuth("google"));
-  elements.githubButton.addEventListener("click", () => signInWithOAuth("github"));
   elements.logoutButton.addEventListener("click", logout);
 
   elements.refreshButton.addEventListener("click", () => {
