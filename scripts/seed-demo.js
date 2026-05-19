@@ -115,6 +115,8 @@ if (creditsOnly) {
 
 if (!supabaseUrl || !serviceRoleKey) {
   console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
+  console.error("Create a local .env from .env.example and fill in the real Supabase values before seeding.");
+  console.error("Note: .vercel/.env.production.local may contain empty placeholders for secret values.");
   process.exit(1);
 }
 

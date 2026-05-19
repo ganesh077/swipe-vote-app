@@ -93,6 +93,8 @@ ADMIN_CODE=street-admin
 PUBLIC_SITE_URL=http://localhost:3000
 ```
 
+Do not rely on `.vercel/.env.production.local` for local seeding; Vercel can leave secret values blank when pulling environment variables. The seed scripts need the real Supabase service-role key in `.env` or in the shell environment.
+
 Seed the starter deck and run the app:
 
 ```bash
