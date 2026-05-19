@@ -33,7 +33,6 @@ const elements = {
     matches: document.getElementById("matchesView"),
     account: document.getElementById("accountView")
   },
-  refreshButton: document.getElementById("refreshButton"),
   voteCard: document.getElementById("voteCard"),
   emptyState: document.getElementById("emptyState"),
   cardImage: document.getElementById("cardImage"),
@@ -773,10 +772,6 @@ function bindEvents() {
   elements.createUserButton.addEventListener("click", () => createAccount("user"));
   elements.createAdminButton.addEventListener("click", () => createAccount("admin"));
   elements.logoutButton.addEventListener("click", logout);
-
-  elements.refreshButton.addEventListener("click", () => {
-    Promise.all([loadItems(), loadResults()]).catch(() => showToast("Refresh failed."));
-  });
 
   elements.viewButtons.forEach((button) => {
     button.addEventListener("click", () => setView(button.dataset.view));

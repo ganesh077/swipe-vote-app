@@ -103,17 +103,6 @@ button {
   font-weight: 650;
 }
 
-.icon-button {
-  width: 42px;
-  height: 42px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.72);
-  color: var(--ink);
-  font-size: 22px;
-  font-weight: 800;
-}
-
 .view-tabs {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
