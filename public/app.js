@@ -141,7 +141,10 @@ async function api(path, options = {}) {
     ...fetchOptions,
     headers
   });
-  const data = await response.json();
+  const contentType = response.headers.get("content-type") || "";
+  const data = contentType.includes("application/json")
+    ? await response.json()
+    : { error: await response.text() };
   if (!response.ok) {
     throw new Error(data.error || "Request failed.");
   }
@@ -799,7 +802,7 @@ async function init() {
   bindEvents();
   try {
     await ensureSupabase();
-    await loadCurrentUser();
+    await loadCurrentUser().catch(() => setCurrentUser(null));
     connectRealtime().catch(() => startPolling());
     await Promise.all([loadItems(), loadResults({ render: false })]);
     renderResults();
