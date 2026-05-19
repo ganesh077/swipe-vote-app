@@ -93,7 +93,7 @@ ADMIN_CODE=street-admin
 PUBLIC_SITE_URL=http://localhost:3000
 ```
 
-Do not rely on `.vercel/.env.production.local` for local seeding; Vercel can leave secret values blank when pulling environment variables. The seed scripts need the real Supabase service-role key in `.env` or in the shell environment.
+Do not rely on `.vercel/.env.production.local` for local seeding; Vercel can leave secret values blank when pulling environment variables. The full 120-item seed needs the real Supabase service-role key in `.env` or in the shell environment.
 
 Seed the starter deck and run the app:
 
@@ -118,6 +118,12 @@ npm run seed:demo -- --credits
 `npm run check` runs static syntax checks and verifies that the seed generator still creates 100+ unique items. The live Supabase smoke check is opt-in because it depends on real project credentials and seeded rows.
 
 `npm run seed:demo -- --force` is a short-demo helper that replaces the deck with 10 curated demo items and Wikimedia Commons food-photo URLs. Use the regular `npm run seed -- --force` command for the full 120-item assessment deck.
+
+The demo seed can run without a local `.env` if Supabase CLI is already logged in and the repo is linked to the project. It uses `.env` first, then falls back to the linked project ref plus your local Supabase CLI access token. You can also pass a project explicitly:
+
+```bash
+npm run seed:demo -- --force --project-ref your-project-ref
+```
 
 ## Deploy To Vercel
 

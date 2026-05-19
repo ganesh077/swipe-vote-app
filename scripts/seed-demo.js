@@ -1,12 +1,16 @@
 import { createClient } from "@supabase/supabase-js";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { loadEnv } from "../server/env.js";
 
-loadEnv();
+const projectRoot = path.resolve(import.meta.dirname, "..");
+
+loadEnv(path.join(projectRoot, ".env"));
+loadEnv(path.join(projectRoot, ".vercel/.env.production.local"));
 
 const force = process.argv.includes("--force");
 const creditsOnly = process.argv.includes("--credits");
-const supabaseUrl = process.env.SUPABASE_URL;
-const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const demoItems = [
   {
@@ -113,12 +117,125 @@ if (creditsOnly) {
   process.exit(0);
 }
 
-if (!supabaseUrl || !serviceRoleKey) {
-  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY.");
-  console.error("Create a local .env from .env.example and fill in the real Supabase values before seeding.");
-  console.error("Note: .vercel/.env.production.local may contain empty placeholders for secret values.");
-  process.exit(1);
+function argValue(name) {
+  const prefix = `--${name}=`;
+  const inline = process.argv.find((arg) => arg.startsWith(prefix));
+  if (inline) {
+    return inline.slice(prefix.length).trim();
+  }
+
+  const index = process.argv.indexOf(`--${name}`);
+  if (index !== -1) {
+    return process.argv[index + 1]?.trim();
+  }
+
+  return "";
 }
+
+function cleanValue(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+function projectRefFromUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.hostname.endsWith(".supabase.co")
+      ? url.hostname.split(".")[0]
+      : "";
+  } catch {
+    return "";
+  }
+}
+
+function readLinkedProjectRef() {
+  const filePath = path.join(projectRoot, "supabase/.temp/project-ref");
+  if (!existsSync(filePath)) {
+    return "";
+  }
+
+  return readFileSync(filePath, "utf8").trim();
+}
+
+function getSupabaseAccessToken() {
+  if (cleanValue(process.env.SUPABASE_ACCESS_TOKEN)) {
+    return cleanValue(process.env.SUPABASE_ACCESS_TOKEN);
+  }
+
+  if (process.platform !== "darwin") {
+    return "";
+  }
+
+  try {
+    const rawToken = execFileSync("security", ["find-generic-password", "-a", "supabase", "-w"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+
+    if (rawToken.startsWith("go-keyring-base64:")) {
+      return Buffer.from(rawToken.slice("go-keyring-base64:".length), "base64").toString("utf8").trim();
+    }
+
+    return rawToken;
+  } catch {
+    return "";
+  }
+}
+
+async function fetchServiceRoleKey(projectRef) {
+  const accessToken = getSupabaseAccessToken();
+  if (!accessToken) {
+    return "";
+  }
+
+  const response = await fetch(`https://api.supabase.com/v1/projects/${projectRef}/api-keys`, {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json"
+    }
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Supabase Management API returned ${response.status}: ${detail}`);
+  }
+
+  const keys = await response.json();
+  return cleanValue(keys.find((key) => key.name === "service_role")?.api_key);
+}
+
+async function resolveSupabaseCredentials() {
+  const envUrl = cleanValue(process.env.SUPABASE_URL);
+  const envKey = cleanValue(process.env.SUPABASE_SERVICE_ROLE_KEY);
+  if (envUrl && envKey) {
+    return { supabaseUrl: envUrl, serviceRoleKey: envKey, source: ".env or shell env" };
+  }
+
+  const projectRef = cleanValue(argValue("project-ref"))
+    || cleanValue(process.env.SUPABASE_PROJECT_REF)
+    || projectRefFromUrl(envUrl)
+    || readLinkedProjectRef();
+
+  if (projectRef) {
+    const serviceRoleKey = await fetchServiceRoleKey(projectRef);
+    if (serviceRoleKey) {
+      return {
+        supabaseUrl: `https://${projectRef}.supabase.co`,
+        serviceRoleKey,
+        source: "Supabase CLI login and linked project"
+      };
+    }
+  }
+
+  throw new Error([
+    "Missing Supabase credentials.",
+    "Option 1: create .env from .env.example with SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    "Option 2: run `supabase login` and `supabase link --project-ref <ref>`, then rerun this script.",
+    "Option 3: set SUPABASE_ACCESS_TOKEN and pass `--project-ref <ref>`."
+  ].join("\n"));
+}
+
+const { supabaseUrl, serviceRoleKey, source } = await resolveSupabaseCredentials();
+console.log(`Using Supabase credentials from ${source}.`);
 
 const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false }
