@@ -35,6 +35,7 @@ const elements = {
   },
   voteCard: document.getElementById("voteCard"),
   emptyState: document.getElementById("emptyState"),
+  deckArea: document.getElementById("deckArea"),
   cardImage: document.getElementById("cardImage"),
   cardCategory: document.getElementById("cardCategory"),
   cardTitle: document.getElementById("cardTitle"),
@@ -225,11 +226,13 @@ function renderVote() {
   elements.yesButton.disabled = !item || state.isVoting;
 
   if (!item) {
+    elements.deckArea.classList.add("is-complete");
     elements.voteCard.hidden = true;
     elements.emptyState.hidden = false;
     return;
   }
 
+  elements.deckArea.classList.remove("is-complete");
   elements.emptyState.hidden = true;
   elements.voteCard.hidden = false;
   resetCardTransform({ instant: true });
