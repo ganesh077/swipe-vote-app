@@ -109,9 +109,13 @@ npm run dev
 npm run check
 RUN_SUPABASE_SMOKE=1 npm run check
 npm run add-item -- --label "Saffron Noodle Cart" --description "Hand-pulled noodles with chili oil and herbs." --category "Noodles" --accent "#2f9c95"
+npm run seed:demo -- --force
+npm run seed:demo -- --credits
 ```
 
 `npm run check` runs static syntax checks and verifies that the seed generator still creates 100+ unique items. The live Supabase smoke check is opt-in because it depends on real project credentials and seeded rows.
+
+`npm run seed:demo -- --force` is a short-demo helper that replaces the deck with 10 curated demo items and Wikimedia Commons food-photo URLs. Use the regular `npm run seed -- --force` command for the full 120-item assessment deck.
 
 ## Deploy To Vercel
 
@@ -136,6 +140,8 @@ The app uses Supabase Realtime instead of an in-process WebSocket server, which 
 The starter items are generated food-pop-up concepts from `server/items.js` and seeded by `scripts/seed.js`. Their default visuals are generated inline SVG cards created by the app code, not photos of real people or third-party assets.
 
 Admin-added items may optionally use a user-supplied image URL. The live demo currently includes at least one admin-added item.
+
+The optional 10-item demo seed in `scripts/seed-demo.js` uses Wikimedia Commons food photos. Run `npm run seed:demo -- --credits` to print image credits and licenses.
 
 ## AI Usage
 

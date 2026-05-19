@@ -8,6 +8,7 @@ const filesToParse = [
   "server/server.js",
   "public/app.js",
   "scripts/seed.js",
+  "scripts/seed-demo.js",
   "scripts/add-item.js",
   "scripts/smoke-test.js"
 ];

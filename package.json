@@ -11,6 +11,7 @@
     "start": "node --no-warnings server/server.js",
     "dev": "node --no-warnings --watch server/server.js",
     "seed": "node --no-warnings scripts/seed.js",
+    "seed:demo": "node --no-warnings scripts/seed-demo.js",
     "add-item": "node --no-warnings scripts/add-item.js",
     "check": "node --no-warnings scripts/smoke-test.js"
   },
