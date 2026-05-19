@@ -80,6 +80,35 @@ function sendError(res, status, message, details = undefined) {
   sendJson(res, status, { error: message, details });
 }
 
+function normalizePublicUrl(value) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+
+  try {
+    const url = new URL(value.startsWith("http") ? value : `https://${value}`);
+    url.pathname = "/";
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
+function publicSiteUrl(req) {
+  const configuredUrl = normalizePublicUrl(process.env.PUBLIC_SITE_URL || process.env.SITE_URL);
+  if (configuredUrl) {
+    return configuredUrl;
+  }
+
+  const forwardedHost = String(req.headers["x-forwarded-host"] || "").split(",")[0].trim();
+  const host = forwardedHost || req.headers.host || "localhost:3000";
+  const forwardedProto = String(req.headers["x-forwarded-proto"] || "").split(",")[0].trim();
+  const protocol = forwardedProto || (host.includes("localhost") || host.startsWith("127.") ? "http" : "https");
+  return `${protocol}://${host}/`;
+}
+
 function escapeXml(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -752,7 +781,13 @@ async function handleRegister(req, res) {
   }
 
   const publicClient = getPublicClient();
-  const { data, error } = await publicClient.auth.signUp({ email, password });
+  const { data, error } = await publicClient.auth.signUp({
+    email,
+    password,
+    options: {
+      emailRedirectTo: publicSiteUrl(req)
+    }
+  });
   if (error) {
     sendError(res, 400, error.message);
     return;

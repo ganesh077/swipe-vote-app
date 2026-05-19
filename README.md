@@ -56,8 +56,15 @@ The repo includes `vercel.json` plus API handlers in `api/`. Set these Vercel en
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 - `ADMIN_CODE`
+- `PUBLIC_SITE_URL` set to the deployed app URL, for example `https://swipe-vote-app.vercel.app`
 
 The app uses Supabase Realtime instead of an in-process WebSocket server, which keeps it compatible with Vercel's serverless runtime.
+
+In Supabase, also set Authentication -> URL Configuration:
+
+- Site URL: `https://swipe-vote-app.vercel.app`
+- Redirect URLs: `https://swipe-vote-app.vercel.app/**`
+- Optional local development redirect: `http://localhost:3000/**`
 
 ## Known Issues
 
